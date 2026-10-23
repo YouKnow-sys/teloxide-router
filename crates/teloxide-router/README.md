@@ -1,4 +1,4 @@
-# teloxide-router [![Rust CI](https://github.com/YouKnow-sys/teloxide-router/actions/workflows/ci.yml/badge.svg)](https://github.com/YouKnow-sys/teloxide-router/actions/workflows/ci.yml) [![MIT](https://img.shields.io/badge/license-MIT-blue.svg)](https://github.com/YouKnow-sys/teloxide-router/blob/master/LICENSE)
+# teloxide-router [![Rust CI](https://github.com/YouKnow-sys/teloxide-router/actions/workflows/ci.yml/badge.svg)](https://github.com/YouKnow-sys/teloxide-router/actions/workflows/ci.yml) [![MIT](https://img.shields.io/badge/license-MIT-blue.svg)](https://github.com/YouKnow-sys/teloxide-router/blob/main/LICENSE)
 
 Register `teloxide` handlers where you write them, and let the router assemble itself.
 
@@ -58,9 +58,16 @@ See the [API documentation](https://docs.rs/teloxide-router) for the full list o
 
 ## Installation
 
+Not on crates.io yet, so depend on the git repository. Note that
+`teloxide-router` uses a wasm-capable `teloxide` fork, so point your own
+`teloxide` dependency at the same fork to avoid pulling in two copies of the
+crate:
+
 ```toml
 [dependencies]
-teloxide-router = "0.1"
-# or txr = { package = "teloxide-router", version = "0.1" }
+teloxide = { git = "https://github.com/YouKnow-sys/teloxide", branch = "wasm", default-features = false, features = ["macros"] }
+teloxide-router = { git = "https://github.com/YouKnow-sys/teloxide-router" }
+# or, aliased:
+# txr = { git = "https://github.com/YouKnow-sys/teloxide-router", package = "teloxide-router" }
 # if you want easier access without manual `teloxide_router as txr`
 ```

@@ -1,13 +1,20 @@
 [package]
 name = "teloxide-router"
-version = "0.1.0"
+version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Attribute-macro handler registration and self-assembling routers for teloxide"
+repository.workspace = true
+readme = "README.md"
+keywords = ["telegram", "bot", "teloxide", "router", "handler"]
+categories = ["api-bindings", "asynchronous"]
 
 [dependencies]
 anyhow = "1.0"
 inventory = "0.3"
 teloxide = { git = "https://github.com/Youknow-sys/teloxide", branch = "wasm", version = "0.17.0", default-features = false }
-teloxide-router-macros = { path = "../teloxide-router-macros" }
+teloxide-router-macros = { path = "../teloxide-router-macros", version = "0.1" }
 
 [features]
 default = []
