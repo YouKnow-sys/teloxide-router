@@ -1,0 +1,25 @@
+//! Implementation details shared with macro expansions; not public API.
+
+#[doc(hidden)]
+pub mod __private {
+    pub use crate::pick::{
+        AsyncPick, Probe, SyncPick, filter_description, filter_map_description,
+        inspect_description, map_description, try_filter_description, try_filter_map_description,
+        try_map_description,
+    };
+    pub use crate::registration::Registration;
+    pub use crate::{Handler, Output};
+    pub use inventory;
+    pub use teloxide::dispatching::{HandlerExt, UpdateFilterExt};
+    pub use teloxide::dptree;
+    pub use teloxide::types::Update;
+
+    /// Constructs a [`Router`](crate::Router); used by the `router!` macro.
+    pub const fn new_router(
+        location: (&'static str, u32, u32),
+        setup: fn(crate::Handler) -> crate::Handler,
+        children: &'static [&'static crate::Router],
+    ) -> crate::Router {
+        crate::Router::new(location, setup, children)
+    }
+}

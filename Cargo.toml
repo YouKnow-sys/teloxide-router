@@ -1,0 +1,39 @@
+[workspace]
+resolver = "3"
+members = ["crates/teloxide-router","crates/teloxide-router-macros"]
+
+[workspace.package]
+edition = "2024"
+
+[profile.release]
+opt-level = "s"
+lto = true
+
+[workspace.lints.clippy]
+cloned_instead_of_copied = "warn"
+collection_is_never_read = "warn"
+dbg_macro = "warn"
+debug_assert_with_mut_call = "warn"
+equatable_if_let = "warn"
+implicit_clone = "warn"
+large_stack_arrays = "warn"
+large_stack_frames = "warn"
+manual_assert = "warn"
+manual_clamp = "warn"
+manual_instant_elapsed = "warn"
+manual_let_else = "warn"
+manual_ok_or = "warn"
+manual_string_new = "warn"
+mismatching_type_param_order = "warn"
+mutex_integer = "warn"
+needless_borrow = "warn"
+needless_continue = "warn"
+needless_pass_by_ref_mut = "warn"
+readonly_write_lock = "warn"
+redundant_closure_for_method_calls = "warn"
+same_functions_in_if_condition = "warn"
+str_to_string = "warn"
+uninlined_format_args = "warn"
+unnecessary_wraps = "warn"
+useless_conversion = "warn"
+zero_sized_map_values = "warn"

@@ -1,0 +1,5 @@
+error: priority may appear at most once
+ --> tests/ui/duplicate_priority.rs:5:49
+  |
+5 | #[txr::message(ROUTER, priority = 1, priority = 2)]
+  |                                                 ^

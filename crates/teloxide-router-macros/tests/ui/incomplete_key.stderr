@@ -1,0 +1,5 @@
+error: expected `=` after `fi`
+ --> tests/ui/incomplete_key.rs:5:24
+  |
+5 | #[txr::message(ROUTER, fi)]
+  |                        ^^

@@ -1,0 +1,22 @@
+[package]
+name = "teloxide-router-macros"
+version = "0.1.0"
+edition.workspace = true
+
+[lib]
+proc-macro = true
+
+[dependencies]
+proc-macro-crate = "3.0"
+proc-macro2 = "1.0"
+quote = "1.0"
+syn = { version = "3.0", features = ["full"] }
+
+[dev-dependencies]
+teloxide = { git = "https://github.com/Youknow-sys/teloxide", branch = "wasm", version = "0.17.0", default-features = false }
+teloxide-router = { path = "../teloxide-router" }
+tokio = { version = "1.39", features = ["rt", "macros"] }
+trybuild = "1.0"
+
+[lints]
+workspace = true

@@ -1,0 +1,5 @@
+error: expected a router path as the first argument, e.g. `#[txr::message(ROUTER)]`
+ --> tests/ui/missing_router.rs:5:16
+  |
+5 | #[txr::message(filter = |_m: teloxide::types::Message| true)]
+  |                ^^^^^^
