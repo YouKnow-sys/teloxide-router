@@ -1,8 +1,8 @@
-//! Attribute macros for teloxide-router.
+//! Procedural macros for teloxide-router.
 //!
-//! Every macro registers a free `async fn` handler on a `static Router` and
-//! leaves the function itself unchanged. The first attribute argument is the
-//! router; the rest are adapters applied in written order:
+//! Every attribute macro registers a free `async fn` handler on a `static Router`
+//! and leaves the function itself unchanged. The first argument is the target
+//! router, followed by adapters applied in written order:
 //!
 //! ```
 //! use teloxide_router as txr;
@@ -23,71 +23,80 @@
 //! # }
 //! ```
 //!
-//! One attribute exists per update kind (e.g. `callback_query`, `inline_query`,
-//! `poll`), named after teloxide's `UpdateFilterExt::filter_*` methods; `update`
-//! is the catch-all that runs for every kind.
-//!
-//! `filter`, `map`, `filter_map`, their fallible `try_` variants and
-//! `inspect` accept sync or async functions and closures, freely mixed. A returned future is
-//! always awaited: a `map` whose function returns a future inserts the
-//! future's output, not the future. Closure parameters need type annotations,
-//! the callable must be `Fn`, and it may take at most 12 arguments.
-//!
-//! The `try_` adapters take functions returning `Result` (with the router's
-//! `anyhow` error type): `Ok` flows on (`Ok(false)`/`Ok(None)` falls through
-//! to the next handler in case of `try_filter` and `try_filter_map`) while
-//! `Err` short-circuits the whole dispatch with that error.
+//! These macros are re-exported by `teloxide-router`. See its crate
+//! documentation for the full list of adapter keys, signatures, and ordering
+//! rules.
 
 mod adapt;
 mod args;
 mod crate_path;
-mod expand;
-mod router_expand;
+mod handler;
+mod router;
 
 use proc_macro::TokenStream;
 
 macro_rules! kinds {
-    ($(($kind:ident, $filter:ident)),* $(,)?) => {
+    ($(($kind:ident, $ty:literal)),* $(,)?) => {
         $(
-            #[doc = concat!("Registers a free `async fn` handler for `", stringify!($filter), "` updates on a `Router`.")]
+            #[doc = concat!("Registers a free `async fn` handler for `", stringify!($kind), "` updates on a `Router`.")]
+            #[doc = ""]
+            #[doc = "The first argument names the router; the rest are adapters, applied in"]
+            #[doc = "written order. Each adapter takes one callable or a bracketed list of"]
+            #[doc = "them, sync or async:"]
+            #[doc = ""]
+            #[doc = "```ignore"]
+            #[doc = "use teloxide_router as txr;"]
+            #[doc = ""]
+            #[doc = "txr::router!(ROUTER);"]
+            #[doc = ""]
+            #[doc = concat!("#[txr::", stringify!($kind), "(ROUTER, filter = is_private, map = [parse, log])]")]
+            #[doc = concat!("async fn handler(event: teloxide::types::", $ty, ") -> txr::Result<()> { /* ... */ }")]
+            #[doc = "```"]
+            #[doc = ""]
+            #[doc = "`state = Dialogue::Start` matches a dependency by pattern, `command ="]
+            #[doc = "Cmd::Start` matches a `BotCommands` variant, and `priority = 5` (default"]
+            #[doc = "0) orders handlers within the router, higher first."]
             #[proc_macro_attribute]
             pub fn $kind(attr: TokenStream, item: TokenStream) -> TokenStream {
-                expand::handler(proc_macro2::Ident::new(stringify!($filter), proc_macro2::Span::call_site()), attr, item)
+                handler::attribute(Some(quote::format_ident!("filter_{}", stringify!($kind))), attr, item)
             }
         )*
     };
 }
 
 kinds! {
-    (message, filter_message),
-    (edited_message, filter_edited_message),
-    (channel_post, filter_channel_post),
-    (edited_channel_post, filter_edited_channel_post),
-    (business_connection, filter_business_connection),
-    (business_message, filter_business_message),
-    (edited_business_message, filter_edited_business_message),
-    (deleted_business_messages, filter_deleted_business_messages),
-    (message_reaction_updated, filter_message_reaction_updated),
-    (message_reaction_count_updated, filter_message_reaction_count_updated),
-    (inline_query, filter_inline_query),
-    (chosen_inline_result, filter_chosen_inline_result),
-    (callback_query, filter_callback_query),
-    (shipping_query, filter_shipping_query),
-    (pre_checkout_query, filter_pre_checkout_query),
-    (purchased_paid_media, filter_purchased_paid_media),
-    (poll, filter_poll),
-    (poll_answer, filter_poll_answer),
-    (my_chat_member, filter_my_chat_member),
-    (chat_member, filter_chat_member),
-    (chat_join_request, filter_chat_join_request),
-    (chat_boost, filter_chat_boost),
-    (removed_chat_boost, filter_removed_chat_boost),
+    (message, "Message"),
+    (edited_message, "Message"),
+    (channel_post, "Message"),
+    (edited_channel_post, "Message"),
+    (business_connection, "BusinessConnection"),
+    (business_message, "Message"),
+    (edited_business_message, "Message"),
+    (deleted_business_messages, "BusinessMessagesDeleted"),
+    (message_reaction_updated, "MessageReactionUpdated"),
+    (message_reaction_count_updated, "MessageReactionCountUpdated"),
+    (inline_query, "InlineQuery"),
+    (chosen_inline_result, "ChosenInlineResult"),
+    (callback_query, "CallbackQuery"),
+    (shipping_query, "ShippingQuery"),
+    (pre_checkout_query, "PreCheckoutQuery"),
+    (purchased_paid_media, "PaidMediaPurchased"),
+    (poll, "Poll"),
+    (poll_answer, "PollAnswer"),
+    (my_chat_member, "ChatMemberUpdated"),
+    (chat_member, "ChatMemberUpdated"),
+    (chat_join_request, "ChatJoinRequest"),
+    (chat_boost, "ChatBoostUpdated"),
+    (removed_chat_boost, "ChatBoostRemoved"),
 }
 
 /// Registers a free `async fn` handler that runs for every update kind.
+///
+/// Takes the same arguments as the per-kind attributes; a kind-specific
+/// handler always runs before it.
 #[proc_macro_attribute]
 pub fn update(attr: TokenStream, item: TokenStream) -> TokenStream {
-    expand::update(attr, item)
+    handler::attribute(None, attr, item)
 }
 
 /// Declares a `static Router` with an optional visibility
@@ -117,5 +126,5 @@ pub fn update(attr: TokenStream, item: TokenStream) -> TokenStream {
 /// routers' handlers run before this router's own.
 #[proc_macro]
 pub fn router(input: TokenStream) -> TokenStream {
-    router_expand::expand(input)
+    router::expand(input)
 }

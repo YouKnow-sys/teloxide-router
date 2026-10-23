@@ -1,0 +1,5 @@
+error: handlers must be `async fn`
+ --> tests/ui/sync_handler.rs:7:1
+  |
+7 | fn handler(msg: teloxide::types::Message) -> txr::Result<()> {
+  | ^^

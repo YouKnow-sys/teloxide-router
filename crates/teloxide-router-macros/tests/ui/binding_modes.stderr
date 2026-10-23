@@ -1,0 +1,5 @@
+error: dptree::case! supports only named bindings, e.g. `Command::Set(a, b)`
+ --> tests/ui/binding_modes.rs:5:43
+  |
+5 | #[txr::message(ROUTER, command = Cmd::Set(mut value))]
+  |                                           ^^^
