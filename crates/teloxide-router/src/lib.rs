@@ -7,7 +7,7 @@
 //!
 //! ## Example:
 //! ```
-//! use teloxide::{prelude::*, sugar::bot::BotMessagesExt};
+//! use teloxide::prelude::*;
 //! use teloxide_router as txr;
 //! use teloxide_router::RouterExt;
 //!
@@ -22,13 +22,13 @@
 //!
 //! #[txr::message(ADMIN)]
 //! async fn say_hi_admin(msg: Message, bot: Bot) -> txr::Result<()> {
-//!     bot.send_message(msg.chat.id, "Hi admin!");
+//!     bot.send_message(msg.chat.id, "Hi admin!").await?;
 //!     Ok(())
 //! }
 //!
 //! #[txr::message(ROUTER)]
 //! async fn say_hi(msg: Message, bot: Bot) -> txr::Result<()> {
-//!     bot.send_message(msg.chat.id, "Hi!");
+//!     bot.send_message(msg.chat.id, "Hi!").await?;
 //!     Ok(())
 //! }
 //!

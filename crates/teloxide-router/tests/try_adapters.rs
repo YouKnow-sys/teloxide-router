@@ -1,6 +1,8 @@
 // Single-threaded current_thread runtime: holding the serial guard across
 // an await cannot deadlock.
 #![allow(clippy::await_holding_lock)]
+// always-`Ok` adapter fns: the wrapper types are the contracts under test
+#![allow(clippy::unnecessary_wraps)]
 
 //! Fallible (`try_*`) adapters, end to end: `Ok` flows, `Ok(false)`/`Ok(None)`
 //! fall through to the next handler, `Err` short-circuits the whole dispatch.

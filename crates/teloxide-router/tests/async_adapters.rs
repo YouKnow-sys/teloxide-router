@@ -1,6 +1,8 @@
 // Single-threaded current_thread runtime: holding the serial guard across
 // an await cannot deadlock.
 #![allow(clippy::await_holding_lock)]
+// always-`Ok` adapter fns: the wrapper types are the contracts under test
+#![allow(clippy::unnecessary_wraps)]
 
 //! Sync and async adapter callables, end to end through the attribute macros
 //! and `router!`.

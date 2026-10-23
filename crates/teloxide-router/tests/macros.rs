@@ -253,3 +253,44 @@ async fn state_matches_the_dialogue_dependency() {
     );
     assert_eq!(common::take(), ["state_ask"]);
 }
+
+// The generated adapter block's locals are hygienic: user code naming a
+// variable or function `__txr_f` still resolves to its own.
+
+fn __txr_f(m: Message) -> bool {
+    m.chat.is_private()
+}
+
+txr::router!(HYGIENE);
+txr::router!(HYGIENE_LOCAL);
+
+#[txr::message(HYGIENE, filter = __txr_f)]
+async fn hygiene_path(_: Message) -> txr::Result<()> {
+    common::record("path");
+    Ok(())
+}
+
+#[txr::message(HYGIENE_LOCAL, filter = |m: Message| {
+    let __txr_f = m.chat.is_private();
+    if __txr_f {
+        common::record("hygiene_local");
+    }
+    __txr_f
+})]
+async fn hygiene_local(_: Message) -> txr::Result<()> {
+    common::record("local");
+    Ok(())
+}
+
+#[tokio::test]
+async fn generated_locals_do_not_collide_with_user_names() {
+    let _ser = common::serial();
+
+    let h = HYGIENE.build();
+    assert!(common::handled(&h, common::MSG).await);
+    assert_eq!(common::take(), ["path"]);
+
+    let h = HYGIENE_LOCAL.build();
+    assert!(common::handled(&h, common::MSG).await);
+    assert_eq!(common::take(), ["hygiene_local", "local"]);
+}

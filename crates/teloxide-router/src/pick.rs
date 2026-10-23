@@ -126,6 +126,7 @@ pub fn inspect_description<D: HandlerDescription>(is_async: bool) -> D {
 }
 
 #[cfg(test)]
+#[allow(clippy::unnecessary_wraps)] // the signatures under test are the point
 mod tests {
     use std::ops::ControlFlow;
 
