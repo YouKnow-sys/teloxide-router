@@ -54,8 +54,6 @@ async fn main() {
 * **Modular composition:** Nest routers across modules with `include = [&admin::ROUTER]`.
 * **WASM ready:** Works on `wasm32-unknown-unknown`.
 
-See the [API documentation](https://docs.rs/teloxide-router) for the full list of attribute keys, adapter signatures, and handler ordering rules.
-
 ## Installation
 
 Not on crates.io yet, so depend on the git repository. Note that
