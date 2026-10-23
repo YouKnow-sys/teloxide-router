@@ -1,4 +1,4 @@
-# teloxide-router
+# teloxide-router [![Rust CI](https://github.com/YouKnow-sys/teloxide-router/actions/workflows/ci.yml/badge.svg)](https://github.com/YouKnow-sys/teloxide-router/actions/workflows/ci.yml) [![MIT](https://img.shields.io/badge/license-MIT-blue.svg)](https://github.com/YouKnow-sys/teloxide-router/blob/master/LICENSE)
 
 Register `teloxide` handlers where you write them, and let the router assemble itself.
 
