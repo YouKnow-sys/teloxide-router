@@ -21,7 +21,7 @@ syn = { version = "3.0", features = ["full"] }
 
 [dev-dependencies]
 teloxide = { git = "https://github.com/Youknow-sys/teloxide", branch = "wasm", version = "0.17.0", default-features = false }
-teloxide-router = { path = "../teloxide-router", version = "0.1" }
+teloxide-router = { path = "../teloxide-router", version = "0.2" }
 tokio = { version = "1.39", features = ["rt", "macros"] }
 trybuild = "1.0"
 

@@ -6,7 +6,6 @@ use teloxide::{
     Bot,
     dispatching::dialogue::{Dialogue, InMemStorage},
     prelude::*,
-    types::Update,
     utils::command::BotCommands,
 };
 use teloxide_router::{self as txr, RouterExt};
@@ -14,7 +13,9 @@ use teloxide_router::{self as txr, RouterExt};
 type Storage = InMemStorage<Step>;
 type StepDialogue = Dialogue<Step, Storage>;
 
-txr::router!(ROUTER);
+// Enters the dialogue for every update with a chat id, so handlers below can
+// take `StepDialogue` and match `state = ...`.
+txr::router!(ROUTER, dialogue = StepDialogue);
 
 #[derive(BotCommands, Clone)]
 #[command(rename_rule = "lowercase")]
@@ -117,9 +118,7 @@ async fn retry(bot: Bot, msg: Message, step: Step) -> txr::Result {
 async fn main() {
     let bot = Bot::new("BOT_TOKEN");
 
-    let handler = txr::entry()
-        .enter_dialogue::<Update, Storage, Step>()
-        .include_router(&ROUTER);
+    let handler = txr::entry().include_router(&ROUTER);
 
     Dispatcher::builder(bot, handler)
         .dependencies(teloxide::dptree::deps![Storage::new()])

@@ -4,7 +4,7 @@ use teloxide_router as txr;
 
 pub const MSG: &str = r#"{"update_id":1,"message":{"message_id":42,"date":1721592028,"chat":{"id":1,"type":"private"},"text":"hi"}}"#;
 
-pub const CALLBACK: &str = r#"{"update_id":2,"callback_query":{"id":"cb1","chat_instance":"x","from":{"id":1,"is_bot":false,"first_name":"A"},"data":"payload"}}"#;
+pub const CALLBACK: &str = r#"{"update_id":2,"callback_query":{"id":"cb1","chat_instance":"x","from":{"id":1,"is_bot":false,"first_name":"A"},"data":"payload","message":{"message_id":7,"date":1721592028,"chat":{"id":1,"type":"private"},"text":"page"}}}"#;
 
 pub const INLINE: &str = r#"{"update_id":3,"inline_query":{"id":"q1","query":"hi","offset":"","from":{"id":1,"is_bot":false,"first_name":"A"}}}"#;
 

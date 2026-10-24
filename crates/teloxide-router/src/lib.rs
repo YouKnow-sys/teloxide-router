@@ -49,7 +49,8 @@
 //!
 //! The first argument is the target [`Router`], followed by `key = value`
 //! options applied in written order. Every key accepts a single item or a list
-//! (`filter = [a, b]`):
+//! (`filter = [a, b]`), except `dialogue` and `dialogue_on`, which take a
+//! single type:
 //!
 //! | Key | Handler | [`router!`] | Behavior |
 //! |---|---|---|---|
@@ -58,10 +59,12 @@
 //! | `filter_map` | yes | yes | Insert the `Some` value; `None` falls through |
 //! | `inspect` | yes | yes | Run for side effects without changing flow |
 //! | `try_filter`, `try_map`, `try_filter_map` | yes | yes | Fallible variants; `Err` aborts dispatch, `Ok(false)` / `Ok(None)` falls through |
-//! | `state` | yes | yes | Match a dialogue state via `dptree::case!` (e.g. `State::Age { name }`) |
+//! | `state` | yes | yes | Match a dialogue state via `dptree::case!` (e.g. `State::Age { name }`); pairs with `dialogue` or an entry-level `enter_dialogue` |
 //! | `command` | yes | no | Filter and match a `BotCommands` variant (e.g. `Command::Start`) |
 //! | `priority` | yes | no | Handler ordering within a router (default `0`, higher runs first) |
 //! | `include` | no | yes | Mount child routers (e.g. `[&admin::ROUTER]`) |
+//! | `dialogue` | no | yes | Enter a dialogue over the given `Dialogue<D, S>` type so handlers can take the dialogue and its state |
+//! | `dialogue_on` | no | yes | The update type `dialogue` reads the chat id from (default `Update`) |
 //!
 //! ## Adapters and Error Handling
 //!

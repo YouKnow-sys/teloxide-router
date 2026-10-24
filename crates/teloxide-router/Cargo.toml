@@ -14,7 +14,7 @@ categories = ["api-bindings", "asynchronous"]
 anyhow = "1.0"
 inventory = "0.3"
 teloxide = { git = "https://github.com/Youknow-sys/teloxide", branch = "wasm", version = "0.17.0", default-features = false }
-teloxide-router-macros = { path = "../teloxide-router-macros", version = "0.1" }
+teloxide-router-macros = { path = "../teloxide-router-macros", version = "0.2" }
 
 [features]
 default = []

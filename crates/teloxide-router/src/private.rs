@@ -2,6 +2,8 @@
 
 #[doc(hidden)]
 pub mod __private {
+    use teloxide::dispatching::dialogue::{Dialogue, Storage};
+
     pub use crate::pick::{
         AsyncPick, Probe, SyncPick, filter_description, filter_map_description,
         inspect_description, map_description, try_filter_description, try_filter_map_description,
@@ -21,5 +23,26 @@ pub mod __private {
         children: &'static [&'static crate::Router],
     ) -> crate::Router {
         crate::Router::new(location, setup, children)
+    }
+
+    /// Splits a `Dialogue<D, S>` type into its state and storage; used by the
+    /// `dialogue` router key.
+    pub trait DialogueSpec {
+        type State: Default + Clone + Send + Sync + 'static;
+        type Store: Storage<Self::State, Error: std::fmt::Debug + Send>
+            + ?Sized
+            + Send
+            + Sync
+            + 'static;
+    }
+
+    impl<D, S> DialogueSpec for Dialogue<D, S>
+    where
+        S: Storage<D> + ?Sized + Send + Sync + 'static,
+        <S as Storage<D>>::Error: std::fmt::Debug + Send,
+        D: Default + Clone + Send + Sync + 'static,
+    {
+        type State = D;
+        type Store = S;
     }
 }

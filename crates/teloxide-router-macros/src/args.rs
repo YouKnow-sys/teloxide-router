@@ -4,7 +4,7 @@ use proc_macro2::{Span, TokenStream};
 use syn::parse::{Parse, ParseStream, Parser};
 use syn::punctuated::Punctuated;
 use syn::spanned::Spanned;
-use syn::{Expr, Ident, LitInt, Pat, Path, Token};
+use syn::{Expr, Ident, LitInt, Pat, Path, Token, Type};
 
 use crate::adapt::{COMBINATORS, Combinator, Link};
 
@@ -14,19 +14,22 @@ enum Ctx {
     Router,
 }
 
+const SHARED_EXTRAS: &[&str] = &["state"];
+const HANDLER_ONLY: &[&str] = &["command", "priority"];
+const ROUTER_ONLY: &[&str] = &["include", "dialogue", "dialogue_on"];
+
 impl Ctx {
     /// In error-message order: the shared combinators, then context extras.
     fn keys(self) -> Vec<&'static str> {
-        const HANDLER_EXTRAS: &[&str] = &["state", "command", "priority"];
-        const ROUTER_EXTRAS: &[&str] = &["state", "include"];
-        let extras = match self {
-            Ctx::Handler => HANDLER_EXTRAS,
-            Ctx::Router => ROUTER_EXTRAS,
+        let own = match self {
+            Ctx::Handler => HANDLER_ONLY,
+            Ctx::Router => ROUTER_ONLY,
         };
         COMBINATORS
             .iter()
+            .chain(SHARED_EXTRAS)
+            .chain(own)
             .copied()
-            .chain(extras.iter().copied())
             .collect()
     }
 }
@@ -89,6 +92,7 @@ struct Parsed {
     links: Vec<Link>,    // router context only
     children: Vec<Expr>, // router context only
     priority: Option<i32>,
+    dialogue_on: Option<(Type, Span)>, // router context only
     first_span: Option<Span>,
 }
 
@@ -103,6 +107,8 @@ enum ItemKind {
     Command(Vec<Pat>),
     Include(Vec<Expr>),
     Priority(i32, Span),
+    Dialogue(Type),
+    DialogueOn(Type),
 }
 
 fn parse(input: TokenStream, ctx: Ctx) -> syn::Result<Parsed> {
@@ -130,6 +136,7 @@ fn parse(input: TokenStream, ctx: Ctx) -> syn::Result<Parsed> {
         links: Vec::new(),
         children: Vec::new(),
         priority: None,
+        dialogue_on: None,
         first_span: items.first().map(|item| item.key.span()),
     };
     let mut err = None;
@@ -179,9 +186,52 @@ fn parse(input: TokenStream, ctx: Ctx) -> syn::Result<Parsed> {
                 parsed.children.extend(values);
                 Ok(())
             }
+            ItemKind::Dialogue(spec) => {
+                if parsed
+                    .links
+                    .iter()
+                    .any(|l| matches!(l, Link::Dialogue { .. }))
+                {
+                    Err(syn::Error::new(
+                        item.key.span(),
+                        "dialogue may appear at most once",
+                    ))
+                } else {
+                    parsed.links.push(Link::Dialogue {
+                        spec: Box::new(spec),
+                        on: None,
+                    });
+                    Ok(())
+                }
+            }
+            ItemKind::DialogueOn(on) => {
+                if parsed.dialogue_on.is_some() {
+                    Err(syn::Error::new(
+                        item.key.span(),
+                        "dialogue_on may appear at most once",
+                    ))
+                } else {
+                    parsed.dialogue_on = Some((on, item.key.span()));
+                    Ok(())
+                }
+            }
         };
         if let Err(e) = result {
             combine(&mut err, e);
+        }
+    }
+    // Filled after the loop so `dialogue_on` may be written before `dialogue`.
+    if let Some((on, span)) = parsed.dialogue_on.take() {
+        let dialogue = parsed.links.iter_mut().find_map(|link| match link {
+            Link::Dialogue { on, .. } => Some(on),
+            _ => None,
+        });
+        match dialogue {
+            Some(slot) => *slot = Some(Box::new(on)),
+            None => combine(
+                &mut err,
+                syn::Error::new(span, "`dialogue_on` requires `dialogue`"),
+            ),
         }
     }
     match err {
@@ -267,15 +317,40 @@ impl Item {
                 let value: i32 = digits.parse().map_err(|e| syn::Error::new(lit.span(), e))?;
                 Ok(ItemKind::Priority(value, lit.span()))
             }
-            (name, ctx) => Err(syn::Error::new(
-                key.span(),
-                format!(
-                    "unknown key `{name}`; expected one of: {}",
-                    ctx.keys().join(", ")
-                ),
-            )),
+            ("dialogue", Ctx::Router) => {
+                Ok(ItemKind::Dialogue(single_type(input, key, "Dialogue")?))
+            }
+            ("dialogue_on", Ctx::Router) => {
+                Ok(ItemKind::DialogueOn(single_type(input, key, "Update")?))
+            }
+            (name, ctx) => {
+                let message = match ctx {
+                    Ctx::Handler if ROUTER_ONLY.contains(&name) => {
+                        format!("`{name}` is only available on `router!`")
+                    }
+                    Ctx::Router if HANDLER_ONLY.contains(&name) => {
+                        format!("`{name}` is only available on handler attributes")
+                    }
+                    _ => format!(
+                        "unknown key `{name}`; expected one of: {}",
+                        ctx.keys().join(", ")
+                    ),
+                };
+                Err(syn::Error::new(key.span(), message))
+            }
         }
     }
+}
+
+fn single_type(input: ParseStream<'_>, key: &Ident, example_val: &str) -> syn::Result<Type> {
+    let ty: Type = input.parse()?;
+    if matches!(ty, Type::Slice(_) | Type::Array(_)) {
+        return Err(syn::Error::new(
+            ty.span(),
+            format!("`{key}` takes a single type, e.g. `{key} = {example_val}`"),
+        ));
+    }
+    Ok(ty)
 }
 
 /// One value or a bracketed list; a single value is sugar for a one-element
@@ -373,7 +448,7 @@ fn enum_path(path: &Path) -> Path {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use quote::quote;
+    use quote::{ToTokens as _, quote};
 
     fn handler(input: TokenStream) -> syn::Result<HandlerArgs> {
         parse_handler(input)
@@ -393,7 +468,7 @@ mod tests {
     fn call_combinator(link: &Link) -> Combinator {
         match link {
             Link::Call { combinator, .. } => *combinator,
-            Link::State(_) => panic!("expected a call link"),
+            _ => panic!("expected a call link"),
         }
     }
 
@@ -515,8 +590,114 @@ mod tests {
     }
 
     #[test]
-    fn router_rejects_command_and_priority() {
-        assert!(router(quote! { command = C::X }).is_err());
-        assert!(router(quote! { priority = 1 }).is_err());
+    fn router_rejects_handler_only_keys() {
+        for input in [quote! { command = C::X }, quote! { priority = 1 }] {
+            let err = expect_err(router(input));
+            assert!(
+                err.to_string()
+                    .contains("only available on handler attributes"),
+                "{err}"
+            );
+        }
+    }
+
+    #[test]
+    fn unknown_keys_list_the_context_keys() {
+        let err = expect_err(router(quote! { nope = 1 }));
+        let message = err.to_string();
+        assert!(message.contains("unknown key `nope`"), "{message}");
+        assert!(message.contains("dialogue_on"), "{message}");
+        assert!(!message.contains("priority"), "{message}");
+
+        let err = expect_err(handler(quote! { ROUTER, nope = 1 }));
+        let message = err.to_string();
+        assert!(message.contains("priority"), "{message}");
+        assert!(!message.contains("dialogue"), "{message}");
+    }
+
+    fn dialogue_link(links: &[Link]) -> (&Type, Option<&Type>) {
+        let [Link::Dialogue { spec, on }] = links else {
+            panic!("expected exactly one dialogue link");
+        };
+        (spec, on.as_deref())
+    }
+
+    fn names(ty: &Type, ident: &str) -> bool {
+        ty.to_token_stream().to_string().contains(ident)
+    }
+
+    #[test]
+    fn dialogue_becomes_a_link_filled_by_dialogue_on() {
+        let args = router(quote! { dialogue = StepDialogue }).unwrap();
+        let (spec, on) = dialogue_link(&args.links);
+        assert!(names(spec, "StepDialogue"));
+        assert!(on.is_none());
+
+        // `dialogue_on` fills the existing link from either side, adding none.
+        for input in [
+            quote! { dialogue_on = CallbackQuery, dialogue = StepDialogue },
+            quote! { dialogue = StepDialogue, dialogue_on = CallbackQuery },
+        ] {
+            let args = router(input).unwrap();
+            let (spec, on) = dialogue_link(&args.links);
+            assert!(names(spec, "StepDialogue"));
+            assert!(on.is_some_and(|ty| names(ty, "CallbackQuery")));
+        }
+    }
+
+    #[test]
+    fn dialogue_keeps_its_written_position() {
+        let args = router(quote! { filter = f, dialogue = D, map = m }).unwrap();
+        assert!(matches!(
+            &args.links[0],
+            Link::Call {
+                combinator: Combinator::Filter,
+                ..
+            }
+        ));
+        assert!(matches!(&args.links[1], Link::Dialogue { .. }));
+        assert!(matches!(
+            &args.links[2],
+            Link::Call {
+                combinator: Combinator::Map,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn dialogue_keys_validate() {
+        let cases: [(TokenStream, &str); 5] = [
+            (
+                quote! { dialogue_on = CallbackQuery },
+                "requires `dialogue`",
+            ),
+            (quote! { dialogue = A, dialogue = B }, "at most once"),
+            (
+                quote! { dialogue_on = A, dialogue_on = B, dialogue = C },
+                "at most once",
+            ),
+            (quote! { dialogue = [A, B] }, "single type"),
+            (quote! { dialogue_on = [A] }, "single type"),
+        ];
+        for (input, message) in cases {
+            let err = expect_err(router(input));
+            assert!(err.to_string().contains(message), "{err}");
+        }
+    }
+
+    #[test]
+    fn handler_rejects_router_only_keys() {
+        for input in [
+            quote! { ROUTER, dialogue = D },
+            quote! { ROUTER, dialogue_on = U },
+            quote! { ROUTER, include = [&R] },
+        ] {
+            let err = expect_err(handler(input));
+            assert!(
+                err.to_string().contains("only available on `router!`"),
+                "{err}"
+            );
+        }
     }
 }

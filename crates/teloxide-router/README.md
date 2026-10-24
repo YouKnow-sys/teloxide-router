@@ -16,7 +16,7 @@ enum Command {
     Start,
 }
 
-// Declare a router (supports router-level filters, maps, states, and child routers)
+// Declare a router (supports router-level filters, maps, states, dialogues, and child routers)
 txr::router!(pub ROUTER, filter = from_humans);
 
 fn from_humans(update: Update) -> bool {

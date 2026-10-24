@@ -1,4 +1,4 @@
-error: unknown key `command`; expected one of: filter, map, filter_map, try_filter, try_map, try_filter_map, inspect, state, include
+error: `command` is only available on handler attributes
  --> tests/ui/command_on_router.rs:3:22
   |
 3 | txr::router!(ROUTER, command = Cmd::Start);

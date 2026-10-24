@@ -2,7 +2,8 @@
 
 use proc_macro2::{Span, TokenStream};
 use quote::{format_ident, quote, quote_spanned};
-use syn::{Expr, Pat};
+use syn::spanned::Spanned as _;
+use syn::{Expr, Pat, Type};
 
 macro_rules! combinators {
     ($(($key:literal, $variant:ident)),* $(,)?) => {
@@ -46,18 +47,25 @@ combinators! {
 }
 
 pub(crate) enum Link {
-    Call { combinator: Combinator, expr: Expr },
+    Call {
+        combinator: Combinator,
+        expr: Expr,
+    },
     State(Pat),
+    Dialogue {
+        spec: Box<Type>,
+        on: Option<Box<Type>>,
+    },
 }
 
 impl Link {
     pub(crate) fn chain(&self, krate: &TokenStream, base: TokenStream) -> TokenStream {
-        let step = match self {
+        match self {
             Link::Call { combinator, expr } => {
                 let (constructor, description) = combinator.constructor_and_description();
                 // `mixed_site` so the scaffolding's locals cannot collide
                 // with names in `expr`; interpolated tokens keep their spans.
-                quote_spanned! {Span::mixed_site()=>
+                let step = quote_spanned! {Span::mixed_site()=>
                     {
                         #[allow(unused_imports)]
                         use #krate::__private::{AsyncPick as _, SyncPick as _};
@@ -68,11 +76,29 @@ impl Link {
                             __txr_f,
                         )
                     }
+                };
+                quote! { #base.chain(#step) }
+            }
+            Link::State(pat) => {
+                let step = quote! { #krate::__private::dptree::case![#pat] };
+                quote! { #base.chain(#step) }
+            }
+            Link::Dialogue { spec, on } => {
+                let on = match on {
+                    Some(ty) => quote! { #ty },
+                    None => quote! { #krate::__private::Update },
+                };
+                // Spanned on the user's type so unmet bounds point at the
+                // `dialogue = ...` value, not at the macro.
+                quote_spanned! {spec.span()=>
+                    #krate::__private::HandlerExt::enter_dialogue::<
+                        #on,
+                        <#spec as #krate::__private::DialogueSpec>::Store,
+                        <#spec as #krate::__private::DialogueSpec>::State,
+                    >(#base)
                 }
             }
-            Link::State(pat) => quote! { #krate::__private::dptree::case![#pat] },
-        };
-        quote! { #base.chain(#step) }
+        }
     }
 }
 
@@ -99,5 +125,34 @@ mod tests {
             assert!(tokens.contains(&format!("{key}_description")), "{key}");
         }
         assert_eq!(Combinator::from_key("flat_map"), None);
+    }
+
+    #[test]
+    fn dialogue_emits_enter_dialogue_with_projections() {
+        let krate = quote!(::teloxide_router);
+        let spec: Type = syn::parse2(quote!(StepDialogue)).unwrap();
+        let on: Type = syn::parse2(quote!(CallbackQuery)).unwrap();
+
+        let default = Link::Dialogue {
+            spec: Box::new(spec.clone()),
+            on: None,
+        }
+        .chain(&krate, quote!(h));
+        let tokens = default.to_string();
+        assert!(tokens.contains("enter_dialogue"));
+        assert!(tokens.contains(
+            "< StepDialogue as :: teloxide_router :: __private :: DialogueSpec > :: Store"
+        ));
+        assert!(tokens.contains(
+            "< StepDialogue as :: teloxide_router :: __private :: DialogueSpec > :: State"
+        ));
+        assert!(tokens.contains("Update"));
+
+        let explicit = Link::Dialogue {
+            spec: Box::new(spec),
+            on: Some(Box::new(on)),
+        }
+        .chain(&krate, quote!(h));
+        assert!(explicit.to_string().contains("CallbackQuery"));
     }
 }

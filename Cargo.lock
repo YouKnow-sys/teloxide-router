@@ -1431,7 +1431,7 @@ dependencies = [
 
 [[package]]
 name = "teloxide-router"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "inventory",
@@ -1443,7 +1443,7 @@ dependencies = [
 
 [[package]]
 name = "teloxide-router-macros"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "proc-macro-crate",
  "proc-macro2",

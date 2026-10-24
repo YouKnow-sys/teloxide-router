@@ -124,6 +124,13 @@ pub fn update(attr: TokenStream, item: TokenStream) -> TokenStream {
 ///
 /// Child routers are included with `include = [&admin::ROUTER]`; the included
 /// routers' handlers run before this router's own.
+///
+/// `dialogue = StepDialogue` enters a dialogue for the whole router, like
+/// `enter_dialogue` on the entry: it takes a `Dialogue<D, S>` type, and
+/// the storage comes from the dispatcher's dependencies. `dialogue_on = T`
+/// replaces the default `Update` as the type the chat id is read from; `T` must
+/// already be in context where the router is mounted. Updates without a chat id
+/// never match a dialogue router.
 #[proc_macro]
 pub fn router(input: TokenStream) -> TokenStream {
     router::expand(input)
