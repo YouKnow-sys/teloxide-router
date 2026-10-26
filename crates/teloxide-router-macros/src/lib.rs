@@ -124,7 +124,10 @@ pub fn update(attr: TokenStream, item: TokenStream) -> TokenStream {
 /// ```
 ///
 /// Child routers are included with `include = [&admin::ROUTER]`; the included
-/// routers' handlers run before this router's own.
+/// routers' handlers run before this router's own. Every router registers
+/// itself for `discover_routers`, which collects the ones no other router
+/// includes, ordered by `priority` (default 0, higher first) then by
+/// declaration position.
 ///
 /// `dialogue = StepDialogue` enters a dialogue for the whole router, like
 /// `enter_dialogue` on the entry: it takes a `Dialogue<D, S>` type, and

@@ -9,7 +9,7 @@ pub mod __private {
         inspect_description, map_description, try_filter_description, try_filter_map_description,
         try_map_description,
     };
-    pub use crate::registration::Registration;
+    pub use crate::registration::{Registration, RouterRegistration};
     pub use crate::{Handler, Output};
     pub use inventory;
     pub use teloxide::dispatching::{HandlerExt, UpdateFilterExt};
@@ -21,8 +21,9 @@ pub mod __private {
         location: (&'static str, u32, u32),
         setup: fn(crate::Handler) -> crate::Handler,
         children: &'static [&'static crate::Router],
+        priority: i32,
     ) -> crate::Router {
-        crate::Router::new(location, setup, children)
+        crate::Router::new(location, setup, children, priority)
     }
 
     /// Splits a `Dialogue<D, S>` type into its state and storage; used by the

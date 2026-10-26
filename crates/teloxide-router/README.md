@@ -42,7 +42,7 @@ async fn on_button(bot: Bot, q: CallbackQuery) -> txr::Result {
 #[tokio::main]
 async fn main() {
     let bot = Bot::from_env();
-    let handler = txr::entry().include_router(&ROUTER);
+    let handler = txr::entry().include_routers(txr::discover_routers());
     Dispatcher::builder(bot, handler).build().dispatch().await;
 }
 ```
@@ -51,7 +51,7 @@ async fn main() {
 
 * **All update kinds:** Every `UpdateFilterExt::filter_*` method has a matching macro (`#[txr::message]`, `#[txr::callback_query]`, `#[txr::chat_member]`, etc.), plus `#[txr::update]` as a catch-all.
 * **Rich adapters:** Chain `filter`, `map`, `filter_map`, `inspect`, dialogue `state`, `command`, and fallible `try_*` variants on both handlers and routers.
-* **Modular composition:** Nest routers across modules with `include = [&admin::ROUTER]`.
+* **Modular composition:** Nest routers across modules with `include = [&admin::ROUTER]`, mount them yourself with `entry().include_router(&ROUTER)`, or collect the roots automatically with `discover_routers`.
 * **WASM ready:** Works on `wasm32-unknown-unknown`.
 
 ## Installation

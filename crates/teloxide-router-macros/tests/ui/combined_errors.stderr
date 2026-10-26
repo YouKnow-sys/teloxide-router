@@ -10,7 +10,7 @@ error: handlers must be `async fn`
 7 | fn handler<T>(msg: teloxide::types::Message) -> txr::Result<()> {
   | ^^
 
-error: unknown key `bogus`; expected one of: filter, map, filter_map, try_filter, try_map, try_filter_map, inspect, state, command, priority
+error: unknown key `bogus`; expected one of: filter, map, filter_map, try_filter, try_map, try_filter_map, inspect, state, priority, command
  --> tests/ui/combined_errors.rs:5:24
   |
 5 | #[txr::message(ROUTER, bogus = 3)]

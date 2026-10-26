@@ -1,7 +1,8 @@
 use std::cmp::Reverse;
+use std::collections::HashSet;
 use std::fmt;
 
-use crate::registration::Registration;
+use crate::registration::{Registration, RouterRegistration};
 use crate::{Handler, entry};
 
 /// A group of handlers assembled by [`Router::build`].
@@ -25,9 +26,10 @@ use crate::{Handler, entry};
 /// # }
 /// ```
 pub struct Router {
-    location: (&'static str, u32, u32),
+    pub(crate) location: (&'static str, u32, u32),
     setup: fn(Handler) -> Handler,
     children: &'static [&'static Router],
+    priority: i32,
 }
 
 impl Router {
@@ -35,11 +37,13 @@ impl Router {
         location: (&'static str, u32, u32),
         setup: fn(Handler) -> Handler,
         children: &'static [&'static Router],
+        priority: i32,
     ) -> Self {
         Self {
             location,
             setup,
             children,
+            priority,
         }
     }
 
@@ -96,11 +100,50 @@ fn loc(location: (&'static str, u32, u32)) -> String {
     format!("{}:{}:{}", location.0, location.1, location.2)
 }
 
+/// Returns the registered routers that no other router includes, ordered by
+/// `priority` (higher first), then by declaration position.
+///
+/// Included routers are left out because their parent builds them together
+/// with its own handlers.
+///
+/// ```
+/// use teloxide_router as txr;
+///
+/// txr::router!(NESTED);
+/// txr::router!(ROOT, include = [&NESTED]);
+///
+/// # fn main() {
+/// let roots = txr::discover_routers();
+/// assert!(roots.iter().any(|r| std::ptr::eq(*r, &ROOT)));
+/// assert!(roots.iter().all(|r| !std::ptr::eq(*r, &NESTED)));
+/// # }
+/// ```
+#[must_use]
+pub fn discover_routers() -> Vec<&'static Router> {
+    crate::wasm::run_ctors();
+
+    let mut routers: Vec<&'static Router> = inventory::iter::<RouterRegistration>
+        .into_iter()
+        .map(|registration| registration.router)
+        .collect();
+
+    let included: HashSet<*const Router> = routers
+        .iter()
+        .flat_map(|router| router.children.iter())
+        .map(|&child| std::ptr::from_ref(child))
+        .collect();
+
+    routers.retain(|&router| !included.contains(&std::ptr::from_ref(router)));
+    routers.sort_by_key(|router| (Reverse(router.priority), router.location));
+    routers
+}
+
 impl fmt::Debug for Router {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Router")
             .field("location", &loc(self.location))
             .field("children", &self.children.len())
+            .field("priority", &self.priority)
             .finish_non_exhaustive()
     }
 }

@@ -14,8 +14,8 @@ enum Ctx {
     Router,
 }
 
-const SHARED_EXTRAS: &[&str] = &["state"];
-const HANDLER_ONLY: &[&str] = &["command", "priority"];
+const SHARED_EXTRAS: &[&str] = &["state", "priority"];
+const HANDLER_ONLY: &[&str] = &["command"];
 const ROUTER_ONLY: &[&str] = &["include", "dialogue", "dialogue_on"];
 
 impl Ctx {
@@ -49,6 +49,7 @@ pub(crate) struct HandlerArgs {
 pub(crate) struct RouterArgs {
     pub(crate) links: Vec<Link>,
     pub(crate) children: Vec<Expr>,
+    pub(crate) priority: i32,
 }
 
 pub(crate) fn combine(err: &mut Option<syn::Error>, e: syn::Error) {
@@ -104,7 +105,9 @@ pub(crate) fn parse_router(input: TokenStream) -> syn::Result<RouterArgs> {
     let mut args = RouterArgs {
         links: Vec::new(),
         children: Vec::new(),
+        priority: 0,
     };
+    let mut priority = None;
     let mut dialogue_on = None;
     let mut err = None;
 
@@ -112,6 +115,9 @@ pub(crate) fn parse_router(input: TokenStream) -> syn::Result<RouterArgs> {
         match kind {
             ItemKind::Link(links) => args.links.extend(links),
             ItemKind::State(pats) => push_patterns(&mut args.links, pats, Link::State, &mut err),
+            ItemKind::Priority(value, span) => {
+                once(&mut priority, value, span, "priority", &mut err)
+            }
             ItemKind::Include(values) => args.children.extend(values),
             ItemKind::Dialogue(spec) => {
                 if args
@@ -135,7 +141,7 @@ pub(crate) fn parse_router(input: TokenStream) -> syn::Result<RouterArgs> {
                 once(&mut dialogue_on, (on, span), span, "dialogue_on", &mut err);
             }
             // Handler-only kinds were rejected while parsing.
-            ItemKind::Command(_) | ItemKind::Priority(..) => {}
+            ItemKind::Command(_) => {}
         }
     }
     // `dialogue_on` may be written before `dialogue`, so it fills the link now.
@@ -152,6 +158,7 @@ pub(crate) fn parse_router(input: TokenStream) -> syn::Result<RouterArgs> {
         }
     }
     finish(err)?;
+    args.priority = priority.unwrap_or(0);
     Ok(args)
 }
 
@@ -284,7 +291,7 @@ impl Item {
                 }
                 Ok(ItemKind::Include(values))
             }
-            ("priority", Ctx::Handler) => {
+            ("priority", _) => {
                 let negated = input.parse::<Option<Token![-]>>()?.is_some();
                 let lit: LitInt = input.parse()?;
                 // `-2147483648` is representable but its digits alone are
@@ -626,14 +633,12 @@ mod tests {
 
     #[test]
     fn router_rejects_handler_only_keys() {
-        for input in [quote! { command = C::X }, quote! { priority = 1 }] {
-            let err = expect_err(parse_router(input));
-            assert!(
-                err.to_string()
-                    .contains("only available on handler attributes"),
-                "{err}"
-            );
-        }
+        let err = expect_err(parse_router(quote! { command = C::X }));
+        assert!(
+            err.to_string()
+                .contains("only available on handler attributes"),
+            "{err}"
+        );
     }
 
     #[test]
@@ -652,7 +657,8 @@ mod tests {
         let message = err.to_string();
         assert!(message.contains("unknown key `nope`"), "{message}");
         assert!(message.contains("dialogue_on"), "{message}");
-        assert!(!message.contains("priority"), "{message}");
+        assert!(message.contains("priority"), "{message}");
+        assert!(!message.contains("command"), "{message}");
 
         let err = expect_err(parse_handler(quote! { ROUTER, nope = 1 }));
         let message = err.to_string();

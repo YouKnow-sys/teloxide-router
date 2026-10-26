@@ -53,13 +53,19 @@ fn expand_inner(input: TokenStream2) -> syn::Result<TokenStream2> {
         .iter()
         .fold(quote! { __txr_h }, |acc, link| link.chain(&krate, acc));
     let children = &args.children;
+    let priority = args.priority;
 
     Ok(quote! {
         #visibility static #name: #krate::Router = #krate::__private::new_router(
             (file!(), line!(), column!()),
             |__txr_h: #krate::Handler| #setup,
             &[#(#children),*],
+            #priority,
         );
+
+        #krate::__private::inventory::submit! {
+            #krate::__private::RouterRegistration { router: &#name }
+        }
     })
 }
 
@@ -84,10 +90,13 @@ mod tests {
 
     #[test]
     fn parses_visibility_name_and_adapters() {
-        let d = ok(quote! { pub(crate) ADMIN, filter = f, include = [&m::R, &n::R] });
+        let d = ok(quote! {
+            pub(crate) ADMIN, filter = f, priority = 3, include = [&m::R, &n::R]
+        });
         assert_eq!(d.name.to_string(), "ADMIN");
         assert_eq!(d.args.links.len(), 1);
         assert_eq!(d.args.children.len(), 2);
+        assert_eq!(d.args.priority, 3);
     }
 
     #[test]

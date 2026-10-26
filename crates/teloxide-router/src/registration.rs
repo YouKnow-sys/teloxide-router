@@ -22,3 +22,20 @@ impl std::fmt::Debug for Registration {
 }
 
 inventory::collect!(Registration);
+
+/// One collected router declaration; produced by `router!` so
+/// [`discover_routers`](crate::discover_routers) can find them.
+pub struct RouterRegistration {
+    /// The declared router.
+    pub router: &'static Router,
+}
+
+impl std::fmt::Debug for RouterRegistration {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("RouterRegistration")
+            .field("router", &self.router.location)
+            .finish_non_exhaustive()
+    }
+}
+
+inventory::collect!(RouterRegistration);

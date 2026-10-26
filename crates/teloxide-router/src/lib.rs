@@ -61,10 +61,16 @@
 //! | `try_filter`, `try_map`, `try_filter_map` | yes | yes | Fallible variants; `Err` aborts dispatch, `Ok(false)` / `Ok(None)` falls through |
 //! | `state` | yes | yes | Match a dialogue state via `dptree::case!` (e.g. `State::Age { name }`); pairs with `dialogue` or an entry-level `enter_dialogue` |
 //! | `command` | yes | no | Filter and match a `BotCommands` variant (e.g. `Command::Start`); bound fields arrive as handler dependencies, a tuple for several |
-//! | `priority` | yes | no | Handler ordering within a router (default `0`, higher runs first); bound fields arrive as handler dependencies, a tuple for several |
+//! | `priority` | yes | yes | Ordering: among a router's handlers, and among routers collected by [`discover_routers`] (default `0`, higher runs first) |
 //! | `include` | no | yes | Mount child routers (e.g. `[&admin::ROUTER]`) |
 //! | `dialogue` | no | yes | Enter a dialogue over the given `Dialogue<D, S>` type so handlers can take the dialogue and its state |
 //! | `dialogue_on` | no | yes | The update type `dialogue` reads the chat id from (default `Update`) |
+//!
+//! ## Discovery
+//!
+//! [`discover_routers`] collects every `router!` static that no other
+//! router includes, ordered by `priority` then declaration position, so a
+//! whole bot can be mounted under one entry point without manual wiring.
 //!
 //! ## Adapters and Error Handling
 //!
@@ -92,5 +98,5 @@ pub use ext::RouterExt;
 pub use handler::{Error, Handler, Output, Result, entry};
 #[doc(hidden)]
 pub use private::__private;
-pub use router::Router;
+pub use router::{Router, discover_routers};
 pub use teloxide_router_macros::*;
