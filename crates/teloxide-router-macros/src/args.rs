@@ -6,7 +6,7 @@ use syn::punctuated::Punctuated;
 use syn::spanned::Spanned;
 use syn::{Expr, Ident, LitInt, Pat, Path, Token, Type};
 
-use crate::adapt::{COMBINATORS, Combinator, Link};
+use crate::adapt::{COMBINATORS, Combinator, Link, StatePat};
 
 #[derive(Clone, Copy)]
 enum Ctx {
@@ -19,7 +19,7 @@ const HANDLER_ONLY: &[&str] = &["command", "priority"];
 const ROUTER_ONLY: &[&str] = &["include", "dialogue", "dialogue_on"];
 
 impl Ctx {
-    /// In error-message order: the shared combinators, then context extras.
+    /// The valid keys in the order they appear in error messages.
     fn keys(self) -> Vec<&'static str> {
         let own = match self {
             Ctx::Handler => HANDLER_ONLY,
@@ -36,28 +36,56 @@ impl Ctx {
 
 pub(crate) enum Step {
     Link(Link),
-    Command { enum_path: Path, pat: Pat },
+    State(StatePat),
+    Command(StatePat),
 }
 
 pub(crate) struct HandlerArgs {
-    pub router: Path,
-    pub steps: Vec<Step>,
-    pub priority: i32,
+    pub(crate) router: Path,
+    pub(crate) steps: Vec<Step>,
+    pub(crate) priority: i32,
 }
 
 pub(crate) struct RouterArgs {
-    pub links: Vec<Link>,
-    pub children: Vec<Expr>,
+    pub(crate) links: Vec<Link>,
+    pub(crate) children: Vec<Expr>,
+}
+
+pub(crate) fn combine(err: &mut Option<syn::Error>, e: syn::Error) {
+    match err {
+        Some(prev) => prev.combine(e),
+        None => *err = Some(e),
+    }
+}
+
+pub(crate) fn finish(err: Option<syn::Error>) -> syn::Result<()> {
+    match err {
+        Some(err) => Err(err),
+        None => Ok(()),
+    }
 }
 
 pub(crate) fn parse_handler(input: TokenStream) -> syn::Result<HandlerArgs> {
-    let Parsed {
-        router,
-        steps,
-        priority,
-        first_span,
-        ..
-    } = parse(input, Ctx::Handler)?;
+    let Parsed { router, items } = parse(input, Ctx::Handler)?;
+    let first_span = items.first().map(|item| item.key.span());
+    let mut priority = None;
+    let mut steps = Vec::new();
+    let mut err = None;
+
+    for Item { kind, .. } in items {
+        match kind {
+            ItemKind::Link(links) => steps.extend(links.into_iter().map(Step::Link)),
+            ItemKind::State(pats) => push_patterns(&mut steps, pats, Step::State, &mut err),
+            ItemKind::Command(pats) => push_patterns(&mut steps, pats, Step::Command, &mut err),
+            ItemKind::Priority(value, span) => {
+                once(&mut priority, value, span, "priority", &mut err)
+            }
+            // Router-only kinds were rejected while parsing.
+            ItemKind::Include(_) | ItemKind::Dialogue(_) | ItemKind::DialogueOn(_) => {}
+        }
+    }
+    finish(err)?;
+
     let Some(router) = router else {
         return Err(syn::Error::new(
             first_span.unwrap_or_else(Span::call_site),
@@ -72,28 +100,89 @@ pub(crate) fn parse_handler(input: TokenStream) -> syn::Result<HandlerArgs> {
 }
 
 pub(crate) fn parse_router(input: TokenStream) -> syn::Result<RouterArgs> {
-    let Parsed {
-        links, children, ..
-    } = parse(input, Ctx::Router)?;
-    Ok(RouterArgs { links, children })
+    let Parsed { items, .. } = parse(input, Ctx::Router)?;
+    let mut args = RouterArgs {
+        links: Vec::new(),
+        children: Vec::new(),
+    };
+    let mut dialogue_on = None;
+    let mut err = None;
+
+    for Item { key, kind } in items {
+        match kind {
+            ItemKind::Link(links) => args.links.extend(links),
+            ItemKind::State(pats) => push_patterns(&mut args.links, pats, Link::State, &mut err),
+            ItemKind::Include(values) => args.children.extend(values),
+            ItemKind::Dialogue(spec) => {
+                if args
+                    .links
+                    .iter()
+                    .any(|l| matches!(l, Link::Dialogue { .. }))
+                {
+                    combine(
+                        &mut err,
+                        syn::Error::new(key.span(), "dialogue may appear at most once"),
+                    );
+                } else {
+                    args.links.push(Link::Dialogue {
+                        spec: Box::new(spec),
+                        on: None,
+                    });
+                }
+            }
+            ItemKind::DialogueOn(on) => {
+                let span = key.span();
+                once(&mut dialogue_on, (on, span), span, "dialogue_on", &mut err);
+            }
+            // Handler-only kinds were rejected while parsing.
+            ItemKind::Command(_) | ItemKind::Priority(..) => {}
+        }
+    }
+    // `dialogue_on` may be written before `dialogue`, so it fills the link now.
+    if let Some((on, span)) = dialogue_on {
+        match args.links.iter_mut().find_map(|link| match link {
+            Link::Dialogue { on, .. } => Some(on),
+            _ => None,
+        }) {
+            Some(slot) => *slot = Some(Box::new(on)),
+            None => combine(
+                &mut err,
+                syn::Error::new(span, "`dialogue_on` requires `dialogue`"),
+            ),
+        }
+    }
+    finish(err)?;
+    Ok(args)
 }
 
-/// Accumulates errors so every problem is reported in one pass.
-pub(crate) fn combine(err: &mut Option<syn::Error>, e: syn::Error) {
-    match err {
-        Some(prev) => prev.combine(e),
-        None => *err = Some(e),
+fn push_patterns<T>(
+    out: &mut Vec<T>,
+    pats: Vec<Pat>,
+    make: fn(StatePat) -> T,
+    err: &mut Option<syn::Error>,
+) {
+    for pat in pats {
+        match parse_state_pat(pat) {
+            Ok(pat) => out.push(make(pat)),
+            Err(e) => combine(err, e),
+        }
+    }
+}
+
+fn once<T>(slot: &mut Option<T>, value: T, span: Span, key: &str, err: &mut Option<syn::Error>) {
+    if slot.is_some() {
+        combine(
+            err,
+            syn::Error::new(span, format!("{key} may appear at most once")),
+        );
+    } else {
+        *slot = Some(value);
     }
 }
 
 struct Parsed {
     router: Option<Path>,
-    steps: Vec<Step>,    // handler context only
-    links: Vec<Link>,    // router context only
-    children: Vec<Expr>, // router context only
-    priority: Option<i32>,
-    dialogue_on: Option<(Type, Span)>, // router context only
-    first_span: Option<Span>,
+    items: Vec<Item>,
 }
 
 struct Item {
@@ -129,136 +218,27 @@ fn parse(input: TokenStream, ctx: Ctx) -> syn::Result<Parsed> {
         Ok((router, parse_items(input, ctx)?))
     })
     .parse2(input)?;
-
-    let mut parsed = Parsed {
-        router,
-        steps: Vec::new(),
-        links: Vec::new(),
-        children: Vec::new(),
-        priority: None,
-        dialogue_on: None,
-        first_span: items.first().map(|item| item.key.span()),
-    };
-    let mut err = None;
-
-    for item in items {
-        let result = match item.kind {
-            ItemKind::Priority(value, span) => {
-                if parsed.priority.is_some() {
-                    Err(syn::Error::new(span, "priority may appear at most once"))
-                } else {
-                    parsed.priority = Some(value);
-                    Ok(())
-                }
-            }
-            ItemKind::Link(links) => {
-                match ctx {
-                    Ctx::Handler => parsed.steps.extend(links.into_iter().map(Step::Link)),
-                    Ctx::Router => parsed.links.extend(links),
-                }
-                Ok(())
-            }
-            ItemKind::State(pats) => {
-                for pat in pats {
-                    match validate_case_pat(&pat, false) {
-                        Ok(_) => match ctx {
-                            Ctx::Handler => parsed.steps.push(Step::Link(Link::State(pat))),
-                            Ctx::Router => parsed.links.push(Link::State(pat)),
-                        },
-                        Err(e) => combine(&mut err, e),
-                    }
-                }
-                Ok(())
-            }
-            ItemKind::Command(pats) => {
-                for pat in pats {
-                    match validate_case_pat(&pat, true) {
-                        Ok(path) => parsed.steps.push(Step::Command {
-                            enum_path: enum_path(path),
-                            pat,
-                        }),
-                        Err(e) => combine(&mut err, e),
-                    }
-                }
-                Ok(())
-            }
-            ItemKind::Include(values) => {
-                parsed.children.extend(values);
-                Ok(())
-            }
-            ItemKind::Dialogue(spec) => {
-                if parsed
-                    .links
-                    .iter()
-                    .any(|l| matches!(l, Link::Dialogue { .. }))
-                {
-                    Err(syn::Error::new(
-                        item.key.span(),
-                        "dialogue may appear at most once",
-                    ))
-                } else {
-                    parsed.links.push(Link::Dialogue {
-                        spec: Box::new(spec),
-                        on: None,
-                    });
-                    Ok(())
-                }
-            }
-            ItemKind::DialogueOn(on) => {
-                if parsed.dialogue_on.is_some() {
-                    Err(syn::Error::new(
-                        item.key.span(),
-                        "dialogue_on may appear at most once",
-                    ))
-                } else {
-                    parsed.dialogue_on = Some((on, item.key.span()));
-                    Ok(())
-                }
-            }
-        };
-        if let Err(e) = result {
-            combine(&mut err, e);
-        }
-    }
-    // Filled after the loop so `dialogue_on` may be written before `dialogue`.
-    if let Some((on, span)) = parsed.dialogue_on.take() {
-        let dialogue = parsed.links.iter_mut().find_map(|link| match link {
-            Link::Dialogue { on, .. } => Some(on),
-            _ => None,
-        });
-        match dialogue {
-            Some(slot) => *slot = Some(Box::new(on)),
-            None => combine(
-                &mut err,
-                syn::Error::new(span, "`dialogue_on` requires `dialogue`"),
-            ),
-        }
-    }
-    match err {
-        Some(err) => Err(err),
-        None => Ok(parsed),
-    }
-}
-
-// `parse_terminated_with` takes a fn pointer, not a closure.
-fn parse_handler_item(input: ParseStream<'_>) -> syn::Result<Item> {
-    Item::parse(input, Ctx::Handler)
-}
-
-fn parse_router_item(input: ParseStream<'_>) -> syn::Result<Item> {
-    Item::parse(input, Ctx::Router)
+    Ok(Parsed { router, items })
 }
 
 fn parse_items(input: ParseStream<'_>, ctx: Ctx) -> syn::Result<Vec<Item>> {
     let parse_one = match ctx {
-        Ctx::Handler => parse_handler_item,
-        Ctx::Router => parse_router_item,
+        Ctx::Handler => Item::parse_handler,
+        Ctx::Router => Item::parse_router,
     };
     let items: Punctuated<Item, Token![,]> = Punctuated::parse_terminated_with(input, parse_one)?;
     Ok(items.into_iter().collect())
 }
 
 impl Item {
+    fn parse_handler(input: ParseStream<'_>) -> syn::Result<Self> {
+        Self::parse(input, Ctx::Handler)
+    }
+
+    fn parse_router(input: ParseStream<'_>) -> syn::Result<Self> {
+        Self::parse(input, Ctx::Router)
+    }
+
     fn parse(input: ParseStream<'_>, ctx: Ctx) -> syn::Result<Self> {
         if !input.peek(Ident) {
             return Err(syn::Error::new(input.span(), "expected `key = value`"));
@@ -371,27 +351,31 @@ fn list<T>(
     }
 }
 
-/// Validates a pattern usable by `dptree::case!`, returning the variant path.
-fn validate_case_pat(pat: &Pat, require_enum: bool) -> syn::Result<&Path> {
-    let path = match pat {
-        Pat::Path(pat) => &pat.path,
-        Pat::Ident(_) if require_enum => {
-            return Err(syn::Error::new(
-                pat.span(),
-                "the pattern must name its enum, e.g. `Command::Start`",
-            ));
-        }
+/// Turns a `state`/`command` pattern into a [`StatePat`]: plain bindings
+/// only, every field bound, the enum named (`Dialogue::Start`, not `Start`).
+fn parse_state_pat(pat: Pat) -> syn::Result<StatePat> {
+    let path = match &pat {
+        Pat::Path(pat) => pat.path.clone(),
         Pat::TupleStruct(pat) => {
             for elem in &pat.elems {
-                require_named_binding(elem)?;
+                check_binding(elem)?;
             }
-            &pat.path
+            pat.path.clone()
         }
         Pat::Struct(pat) => {
-            for field in &pat.fields {
-                require_named_binding(&field.pat)?;
+            if let Some(rest) = &pat.rest {
+                return Err(wildcard_error(rest.span()));
             }
-            &pat.path
+            for field in &pat.fields {
+                check_binding(&field.pat)?;
+            }
+            pat.path.clone()
+        }
+        Pat::Ident(pat) => {
+            return Err(syn::Error::new(
+                pat.span(),
+                "the pattern must name its enum, e.g. `Dialogue::Start`",
+            ));
         }
         other => {
             return Err(syn::Error::new(
@@ -408,36 +392,42 @@ fn validate_case_pat(pat: &Pat, require_enum: bool) -> syn::Result<&Path> {
             ));
         }
     }
-    if require_enum && path.segments.len() < 2 {
+    if path.segments.len() < 2 {
         return Err(syn::Error::new(
             path.span(),
-            "the pattern must name its enum, e.g. `Command::Start`",
+            "the pattern must name its enum, e.g. `Dialogue::Start`",
         ));
     }
-    Ok(path)
+    Ok(StatePat {
+        enum_path: enum_path(&path),
+        pat,
+    })
 }
 
-// `dptree::case!` matches its parameters with `ident` fragments, so anything
-// that is not a plain named binding (not even `_`) would fail to expand.
-fn require_named_binding(pat: &Pat) -> syn::Result<()> {
-    let plain = match pat {
-        Pat::Ident(ident) => {
-            ident.by_ref.is_none() && ident.mutability.is_none() && ident.subpat.is_none()
+/// A binding position; `case!` binds through plain idents only.
+fn check_binding(pat: &Pat) -> syn::Result<()> {
+    match pat {
+        Pat::Ident(pat)
+            if pat.by_ref.is_none() && pat.mutability.is_none() && pat.subpat.is_none() =>
+        {
+            Ok(())
         }
-        _ => false,
-    };
-    if plain {
-        Ok(())
-    } else {
-        Err(syn::Error::new(
+        Pat::Wild(_) | Pat::Rest(_) => Err(wildcard_error(pat.span())),
+        _ => Err(syn::Error::new(
             pat.span(),
-            "dptree::case! supports only named bindings, e.g. `Command::Set(a, b)`",
-        ))
+            "patterns support plain bindings, e.g. `Command::Set(a, b)`",
+        )),
     }
 }
 
-// `validate_case_pat` guarantees at least two segments here; `pop` leaves
-// the punctuator that led into the removed segment.
+fn wildcard_error(span: Span) -> syn::Error {
+    syn::Error::new(
+        span,
+        "`case!` has no wildcard arm; bind every field, e.g. `Command::Set(a, b)`",
+    )
+}
+
+// `pop` leaves the punctuator that led into the removed segment.
 fn enum_path(path: &Path) -> Path {
     let mut path = path.clone();
     let _ = path.segments.pop();
@@ -448,15 +438,7 @@ fn enum_path(path: &Path) -> Path {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use quote::{ToTokens as _, quote};
-
-    fn handler(input: TokenStream) -> syn::Result<HandlerArgs> {
-        parse_handler(input)
-    }
-
-    fn router(input: TokenStream) -> syn::Result<RouterArgs> {
-        parse_router(input)
-    }
+    use quote::{ToTokens, quote};
 
     fn expect_err<T>(result: syn::Result<T>) -> syn::Error {
         match result {
@@ -482,137 +464,21 @@ mod tests {
             .collect()
     }
 
-    #[test]
-    fn lists_flatten_in_written_order() {
-        let args = handler(quote! { ROUTER, filter = [f, g], map = m }).unwrap();
-        assert_eq!(
-            call_combinators(&args.steps),
-            [Combinator::Filter, Combinator::Filter, Combinator::Map]
-        );
-    }
-
-    #[test]
-    fn single_value_is_a_one_element_list() {
-        let args = handler(quote! { ROUTER, filter = f }).unwrap();
-        assert_eq!(args.steps.len(), 1);
-    }
-
-    #[test]
-    fn default_priority_is_zero() {
-        let args = handler(quote! { ROUTER }).unwrap();
-        assert_eq!(args.priority, 0);
-        let args = handler(quote! { ROUTER, priority = -5 }).unwrap();
-        assert_eq!(args.priority, -5);
-    }
-
-    #[test]
-    fn priority_accepts_i32_min_and_rejects_overflow() {
-        let args = handler(quote! { ROUTER, priority = -2147483648 }).unwrap();
-        assert_eq!(args.priority, i32::MIN);
-        assert!(handler(quote! { ROUTER, priority = 2147483648 }).is_err());
-        assert!(handler(quote! { ROUTER, priority = -2147483649 }).is_err());
-    }
-
-    #[test]
-    fn router_path_must_come_first() {
-        assert!(handler(quote! { filter = f, ROUTER }).is_err());
-    }
-
-    #[test]
-    fn command_variants_extract_the_enum() {
-        let args = handler(quote! { ROUTER, command = Cmd::Start }).unwrap();
-        let Step::Command { enum_path, .. } = &args.steps[0] else {
+    fn command_step(args: &HandlerArgs) -> &StatePat {
+        let Step::Command(pat) = &args.steps[0] else {
             panic!("not a command step");
         };
-        assert_eq!(enum_path.segments.len(), 1);
-        assert_eq!(enum_path.segments[0].ident, "Cmd");
-
-        let args = handler(quote! { ROUTER, command = Cmd::Set(a, b) }).unwrap();
-        assert!(matches!(&args.steps[0], Step::Command { .. }));
-
-        let args = handler(quote! { ROUTER, command = Cmd::Get { x } }).unwrap();
-        assert!(matches!(&args.steps[0], Step::Command { .. }));
+        pat
     }
 
-    #[test]
-    fn command_requires_the_enum_name() {
-        let err = expect_err(handler(quote! { ROUTER, command = Start }));
-        assert!(err.to_string().contains("must name its enum"));
-    }
-
-    #[test]
-    fn wildcards_are_rejected() {
-        let err = expect_err(handler(quote! { ROUTER, state = Foo(_) }));
-        assert!(err.to_string().contains("named bindings"));
-    }
-
-    #[test]
-    fn binding_modes_are_rejected() {
-        for input in [
-            quote! { ROUTER, state = Foo(mut a) },
-            quote! { ROUTER, state = Foo(ref a) },
-            quote! { ROUTER, state = Foo(a @ _) },
-        ] {
-            let err = expect_err(handler(input));
-            assert!(err.to_string().contains("named bindings"));
-        }
-    }
-
-    #[test]
-    fn include_takes_router_references() {
-        let args = router(quote! { include = [&admin::ROUTER, &other::ROUTER] }).unwrap();
-        assert_eq!(args.children.len(), 2);
-        assert!(args.links.is_empty());
-        assert!(router(quote! { include = [admin::ROUTER] }).is_err());
-    }
-
-    #[test]
-    fn try_keys_parse_in_both_contexts() {
-        let args = handler(
-            quote! { ROUTER, try_filter = f, try_map = m, try_filter_map = fm, inspect = i },
-        )
-        .unwrap();
-        assert_eq!(
-            call_combinators(&args.steps),
-            [
-                Combinator::TryFilter,
-                Combinator::TryMap,
-                Combinator::TryFilterMap,
-                Combinator::Inspect
-            ]
-        );
-
-        let args = router(quote! { try_map = m }).unwrap();
-        assert_eq!(
-            args.links.iter().map(call_combinator).collect::<Vec<_>>(),
-            [Combinator::TryMap]
-        );
-    }
-
-    #[test]
-    fn router_rejects_handler_only_keys() {
-        for input in [quote! { command = C::X }, quote! { priority = 1 }] {
-            let err = expect_err(router(input));
-            assert!(
-                err.to_string()
-                    .contains("only available on handler attributes"),
-                "{err}"
-            );
-        }
-    }
-
-    #[test]
-    fn unknown_keys_list_the_context_keys() {
-        let err = expect_err(router(quote! { nope = 1 }));
-        let message = err.to_string();
-        assert!(message.contains("unknown key `nope`"), "{message}");
-        assert!(message.contains("dialogue_on"), "{message}");
-        assert!(!message.contains("priority"), "{message}");
-
-        let err = expect_err(handler(quote! { ROUTER, nope = 1 }));
-        let message = err.to_string();
-        assert!(message.contains("priority"), "{message}");
-        assert!(!message.contains("dialogue"), "{message}");
+    // Quote separates every token with a space; squeeze before comparing.
+    fn squeezed(tokens: impl ToTokens) -> String {
+        tokens
+            .to_token_stream()
+            .to_string()
+            .chars()
+            .filter(|c| !c.is_whitespace())
+            .collect()
     }
 
     fn dialogue_link(links: &[Link]) -> (&Type, Option<&Type>) {
@@ -627,18 +493,185 @@ mod tests {
     }
 
     #[test]
+    fn lists_flatten_in_written_order() {
+        let args = parse_handler(quote! { ROUTER, filter = [f, g], map = m }).unwrap();
+        assert_eq!(
+            call_combinators(&args.steps),
+            [Combinator::Filter, Combinator::Filter, Combinator::Map]
+        );
+    }
+
+    #[test]
+    fn single_value_is_a_one_element_list() {
+        let args = parse_handler(quote! { ROUTER, filter = f }).unwrap();
+        assert_eq!(args.steps.len(), 1);
+    }
+
+    #[test]
+    fn default_priority_is_zero() {
+        let args = parse_handler(quote! { ROUTER }).unwrap();
+        assert_eq!(args.priority, 0);
+        let args = parse_handler(quote! { ROUTER, priority = -5 }).unwrap();
+        assert_eq!(args.priority, -5);
+    }
+
+    #[test]
+    fn priority_accepts_i32_min_and_rejects_overflow() {
+        let args = parse_handler(quote! { ROUTER, priority = -2147483648 }).unwrap();
+        assert_eq!(args.priority, i32::MIN);
+        assert!(parse_handler(quote! { ROUTER, priority = 2147483648 }).is_err());
+        assert!(parse_handler(quote! { ROUTER, priority = -2147483649 }).is_err());
+    }
+
+    #[test]
+    fn router_path_must_come_first() {
+        assert!(parse_handler(quote! { filter = f, ROUTER }).is_err());
+    }
+
+    #[test]
+    fn command_variants_extract_the_enum() {
+        for input in [
+            quote! { ROUTER, command = Cmd::Start },
+            quote! { ROUTER, command = Cmd::Set(a, b) },
+            quote! { ROUTER, command = Cmd::Get { x } },
+        ] {
+            let args = parse_handler(input).unwrap();
+            let pat = command_step(&args);
+            assert_eq!(pat.enum_path.segments.len(), 1);
+            assert_eq!(pat.enum_path.segments[0].ident, "Cmd");
+        }
+    }
+
+    #[test]
+    fn command_requires_the_enum_name() {
+        let err = expect_err(parse_handler(quote! { ROUTER, command = Start }));
+        assert!(err.to_string().contains("must name its enum"));
+        // A bare ident binds instead of matching, so `state` needs it too.
+        let err = expect_err(parse_handler(quote! { ROUTER, state = Start }));
+        assert!(err.to_string().contains("must name its enum"));
+    }
+
+    #[test]
+    fn binding_modes_are_rejected() {
+        for input in [
+            quote! { ROUTER, state = Foo(mut a) },
+            quote! { ROUTER, state = Foo(ref a) },
+            quote! { ROUTER, state = Foo(a @ _) },
+        ] {
+            let err = expect_err(parse_handler(input));
+            assert!(err.to_string().contains("plain bindings"));
+        }
+    }
+
+    #[test]
+    fn patterns_reject_wildcards() {
+        for input in [
+            quote! { ROUTER, state = Foo::Bar(_) },
+            quote! { ROUTER, state = Foo::Bar(a, _) },
+            quote! { ROUTER, state = Foo::Bar { x: _ } },
+            quote! { ROUTER, state = Foo::Bar { x, .. } },
+            quote! { ROUTER, command = Cmd::Set(a, _) },
+        ] {
+            let err = expect_err(parse_handler(input).map(|_| ()));
+            assert!(err.to_string().contains("no wildcard arm"), "{err}");
+        }
+        let err = expect_err(parse_router(quote! { state = Foo::Bar { .. } }).map(|_| ()));
+        assert!(err.to_string().contains("no wildcard arm"), "{err}");
+    }
+
+    #[test]
+    fn include_takes_router_references() {
+        let args = parse_router(quote! { include = [&admin::ROUTER, &other::ROUTER] }).unwrap();
+        assert_eq!(args.children.len(), 2);
+        assert!(args.links.is_empty());
+        assert!(parse_router(quote! { include = [admin::ROUTER] }).is_err());
+    }
+
+    #[test]
+    fn state_links_emit_case() {
+        for input in [
+            quote! { state = Dialogue::Start },
+            quote! { state = States::Users(state) },
+            quote! { state = States::Users { state } },
+            quote! { state = Dialogue::Tell(a, b) },
+        ] {
+            let args = parse_router(input).unwrap();
+            let tokens = squeezed(args.links[0].chain(&quote!(::teloxide_router), quote!(h)));
+            assert!(tokens.contains("case!["), "{tokens}");
+        }
+    }
+
+    #[test]
+    fn try_keys_parse_in_both_contexts() {
+        let args = parse_handler(
+            quote! { ROUTER, try_filter = f, try_map = m, try_filter_map = fm, inspect = i },
+        )
+        .unwrap();
+        assert_eq!(
+            call_combinators(&args.steps),
+            [
+                Combinator::TryFilter,
+                Combinator::TryMap,
+                Combinator::TryFilterMap,
+                Combinator::Inspect
+            ]
+        );
+
+        let args = parse_router(quote! { try_map = m }).unwrap();
+        assert_eq!(
+            args.links.iter().map(call_combinator).collect::<Vec<_>>(),
+            [Combinator::TryMap]
+        );
+    }
+
+    #[test]
+    fn router_rejects_handler_only_keys() {
+        for input in [quote! { command = C::X }, quote! { priority = 1 }] {
+            let err = expect_err(parse_router(input));
+            assert!(
+                err.to_string()
+                    .contains("only available on handler attributes"),
+                "{err}"
+            );
+        }
+    }
+
+    #[test]
+    fn router_state_takes_any_pattern_list() {
+        // Same-enum patterns are allowed too; they can never both match,
+        // which is the user's call.
+        let args =
+            parse_router(quote! { state = [States::Users(us), Steps::Done, States::Admins] })
+                .unwrap();
+        assert_eq!(args.links.len(), 3);
+        assert!(args.links.iter().all(|l| matches!(l, Link::State(_))));
+    }
+    #[test]
+    fn unknown_keys_list_the_context_keys() {
+        let err = expect_err(parse_router(quote! { nope = 1 }));
+        let message = err.to_string();
+        assert!(message.contains("unknown key `nope`"), "{message}");
+        assert!(message.contains("dialogue_on"), "{message}");
+        assert!(!message.contains("priority"), "{message}");
+
+        let err = expect_err(parse_handler(quote! { ROUTER, nope = 1 }));
+        let message = err.to_string();
+        assert!(message.contains("priority"), "{message}");
+        assert!(!message.contains("dialogue"), "{message}");
+    }
+
+    #[test]
     fn dialogue_becomes_a_link_filled_by_dialogue_on() {
-        let args = router(quote! { dialogue = StepDialogue }).unwrap();
+        let args = parse_router(quote! { dialogue = StepDialogue }).unwrap();
         let (spec, on) = dialogue_link(&args.links);
         assert!(names(spec, "StepDialogue"));
         assert!(on.is_none());
 
-        // `dialogue_on` fills the existing link from either side, adding none.
         for input in [
             quote! { dialogue_on = CallbackQuery, dialogue = StepDialogue },
             quote! { dialogue = StepDialogue, dialogue_on = CallbackQuery },
         ] {
-            let args = router(input).unwrap();
+            let args = parse_router(input).unwrap();
             let (spec, on) = dialogue_link(&args.links);
             assert!(names(spec, "StepDialogue"));
             assert!(on.is_some_and(|ty| names(ty, "CallbackQuery")));
@@ -647,7 +680,7 @@ mod tests {
 
     #[test]
     fn dialogue_keeps_its_written_position() {
-        let args = router(quote! { filter = f, dialogue = D, map = m }).unwrap();
+        let args = parse_router(quote! { filter = f, dialogue = D, map = m }).unwrap();
         assert!(matches!(
             &args.links[0],
             Link::Call {
@@ -681,7 +714,7 @@ mod tests {
             (quote! { dialogue_on = [A] }, "single type"),
         ];
         for (input, message) in cases {
-            let err = expect_err(router(input));
+            let err = expect_err(parse_router(input));
             assert!(err.to_string().contains(message), "{err}");
         }
     }
@@ -693,7 +726,7 @@ mod tests {
             quote! { ROUTER, dialogue_on = U },
             quote! { ROUTER, include = [&R] },
         ] {
-            let err = expect_err(handler(input));
+            let err = expect_err(parse_handler(input));
             assert!(
                 err.to_string().contains("only available on `router!`"),
                 "{err}"

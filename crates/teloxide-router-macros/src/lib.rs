@@ -53,9 +53,10 @@ macro_rules! kinds {
             #[doc = concat!("async fn handler(event: teloxide::types::", $ty, ") -> txr::Result<()> { /* ... */ }")]
             #[doc = "```"]
             #[doc = ""]
-            #[doc = "`state = Dialogue::Start` matches a dependency by pattern, `command ="]
-            #[doc = "Cmd::Start` matches a `BotCommands` variant, and `priority = 5` (default"]
-            #[doc = "0) orders handlers within the router, higher first."]
+            #[doc = "`state = Step::Start` matches a state variant and `command = Cmd::Start`"]
+            #[doc = "matches a `BotCommands` variant, supplying their bound fields as"]
+            #[doc = "dependencies (a tuple for several). `priority = 5` (default 0) orders"]
+            #[doc = "handlers within the router, higher first."]
             #[proc_macro_attribute]
             pub fn $kind(attr: TokenStream, item: TokenStream) -> TokenStream {
                 handler::attribute(Some(quote::format_ident!("filter_{}", stringify!($kind))), attr, item)

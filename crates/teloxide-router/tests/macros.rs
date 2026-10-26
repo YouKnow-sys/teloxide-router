@@ -7,16 +7,9 @@
 #[allow(dead_code)]
 mod common;
 
-use std::ops::ControlFlow;
 use teloxide::types::{CallbackQuery, Message, Update};
 use teloxide::utils::command::BotCommands;
 use teloxide_router as txr;
-
-fn msg_with_text(text: &str) -> String {
-    format!(
-        r#"{{"update_id":1,"message":{{"message_id":42,"date":1721592028,"chat":{{"id":1,"type":"private"}},"text":"{text}"}}}}"#
-    )
-}
 
 #[derive(Clone)]
 struct Settings {
@@ -158,14 +151,18 @@ async fn children_first_then_own_handlers() {
     assert_eq!(common::take(), ["child"]);
 }
 
-// Commands with unit, tuple and struct variants.
+// Commands with unit, tuple and struct variants; bindings reach the body.
 
 #[derive(BotCommands, Clone, Debug)]
 #[command(rename_rule = "lowercase")]
 enum Cmd {
     Start,
     Set(u32),
-    Get { flag: u32 },
+    #[command(parse_with = "split")]
+    Swap(u32, u32),
+    Get {
+        flag: u32,
+    },
 }
 
 txr::router!(CMDS);
@@ -188,19 +185,27 @@ async fn cmd_get(_: Message, flag: u32) -> txr::Result<()> {
     Ok(())
 }
 
+#[txr::message(CMDS, command = Cmd::Swap(a, b))]
+async fn cmd_swap(_: Message, (a, b): (u32, u32)) -> txr::Result {
+    common::record(if (a, b) == (4, 2) { "swap" } else { "swap_bad" });
+    Ok(())
+}
+
 #[tokio::test]
 async fn command_variants_dispatch() {
     let _ser = common::serial();
     let h = CMDS.build();
-    assert!(common::handled(&h, &msg_with_text("/start")).await);
+    assert!(common::handled(&h, &common::msg_with_text("/start")).await);
     assert_eq!(common::take(), ["unit"]);
-    assert!(common::handled(&h, &msg_with_text("/set 42")).await);
+    assert!(common::handled(&h, &common::msg_with_text("/set 42")).await);
     assert_eq!(common::take(), ["tuple"]);
-    assert!(common::handled(&h, &msg_with_text("/get 7")).await);
+    assert!(common::handled(&h, &common::msg_with_text("/get 7")).await);
     assert_eq!(common::take(), ["struct"]);
+    assert!(common::handled(&h, &common::msg_with_text("/swap 4 2")).await);
+    assert_eq!(common::take(), ["swap"]);
 }
 
-// State adapters match a dependency by pattern.
+// State adapters filter by variant; their bindings become body locals.
 
 #[derive(Clone)]
 enum Dialogue {
@@ -231,27 +236,42 @@ async fn state_matches_the_dialogue_dependency() {
     let _ser = common::serial();
     let h = STATE.build();
 
-    let dispatch = |dialogue: Dialogue| {
-        let h = h.clone();
-        // Dispatch with an extra dependency besides Update and Me.
-        async move {
-            let mut dm = teloxide::dptree::di::DependencyMap::new();
-            dm.insert(common::update(common::MSG));
-            dm.insert(common::me());
-            dm.insert(dialogue);
-            matches!(h.dispatch(dm).await, ControlFlow::Break(Ok(())))
-        }
-    };
-
-    assert!(dispatch(Dialogue::Start).await);
+    assert!(common::handled_with(&h, common::MSG, |dm| dm.insert(Dialogue::Start)).await);
     assert_eq!(common::take(), ["state_start"]);
     assert!(
-        dispatch(Dialogue::Ask {
+        common::handled_with(&h, common::MSG, |dm| dm.insert(Dialogue::Ask {
             name: "rust".into()
-        })
+        }))
         .await
     );
     assert_eq!(common::take(), ["state_ask"]);
+}
+
+// Router-level `state` gates the whole router on the variant; the enum stays
+// available to handlers.
+
+txr::router!(ROUTER_STATE, state = Dialogue::Ask { name });
+
+#[txr::message(ROUTER_STATE)]
+async fn router_state_handler(_: Message, _: Dialogue) -> txr::Result<()> {
+    common::record("router_state");
+    Ok(())
+}
+
+#[tokio::test]
+async fn router_state_gates_and_keeps_the_enum() {
+    let _ser = common::serial();
+    let h = ROUTER_STATE.build();
+
+    assert!(
+        common::handled_with(&h, common::MSG, |dm| dm
+            .insert(Dialogue::Ask { name: "any".into() }))
+        .await
+    );
+    assert_eq!(common::take(), ["router_state"]);
+    // The variant does not match, so the whole router falls through.
+    assert!(!common::handled_with(&h, common::MSG, |dm| dm.insert(Dialogue::Start)).await);
+    assert!(common::take().is_empty());
 }
 
 // The generated adapter block's locals are hygienic: user code naming a
@@ -293,4 +313,121 @@ async fn generated_locals_do_not_collide_with_user_names() {
     let h = HYGIENE_LOCAL.build();
     assert!(common::handled(&h, common::MSG).await);
     assert_eq!(common::take(), ["hygiene_local", "local"]);
+}
+
+// Router-level state extraction: the router takes the variant it serves from
+// a sum-type state, and its handlers work with the inner state.
+
+#[derive(Clone)]
+enum States {
+    Users(UserStates),
+    Admins,
+}
+
+#[derive(Clone)]
+enum UserStates {
+    ReceiveName,
+    ReceiveAge { name: String },
+}
+
+txr::router!(EXTRACT, state = States::Users(us));
+
+#[txr::message(EXTRACT, state = UserStates::ReceiveName)]
+async fn extract_name(_: Message) -> txr::Result<()> {
+    common::record("extract_name");
+    Ok(())
+}
+
+#[txr::message(EXTRACT, state = UserStates::ReceiveAge { name })]
+async fn extract_age(_: Message, name: String) -> txr::Result<()> {
+    common::record(if name == "rust" {
+        "extract_age"
+    } else {
+        "extract_bad"
+    });
+    Ok(())
+}
+
+#[tokio::test]
+async fn router_state_extracts_the_inner_state() {
+    let _ser = common::serial();
+    let h = EXTRACT.build();
+
+    let dispatch = |state: States| common::handled_with(&h, common::MSG, |dm| dm.insert(state));
+
+    assert!(
+        dispatch(States::Users(UserStates::ReceiveName)).await,
+        "the extracted state routes to the handler"
+    );
+    assert_eq!(common::take(), ["extract_name"]);
+    assert!(
+        dispatch(States::Users(UserStates::ReceiveAge {
+            name: "rust".into()
+        }))
+        .await
+    );
+    assert_eq!(common::take(), ["extract_age"]);
+    // Other variants of the outer state never reach this router's handlers.
+    assert!(!dispatch(States::Admins).await);
+    assert!(common::take().is_empty());
+}
+
+// Two distinct state enums can gate one router at once; both extractions
+// insert their inner state for the handlers below.
+
+#[derive(Clone)]
+enum Steps {
+    Wizard(WizardStep),
+    Done,
+}
+
+#[derive(Clone)]
+enum WizardStep {
+    Name,
+}
+
+txr::router!(DUAL, state = [States::Users(us), Steps::Wizard(wizard)]);
+
+#[txr::message(DUAL, state = UserStates::ReceiveName)]
+async fn dual_name(_: Message, wizard: WizardStep) -> txr::Result {
+    common::record(if matches!(wizard, WizardStep::Name) {
+        "dual_name"
+    } else {
+        "dual_bad"
+    });
+    Ok(())
+}
+
+#[tokio::test]
+async fn two_state_enums_must_both_match() {
+    let _ser = common::serial();
+    let h = DUAL.build();
+
+    let dispatch = |states: States, steps: Steps| {
+        common::handled_with(&h, common::MSG, |dm| {
+            dm.insert(states);
+            dm.insert(steps);
+        })
+    };
+
+    assert!(
+        dispatch(
+            States::Users(UserStates::ReceiveName),
+            Steps::Wizard(WizardStep::Name)
+        )
+        .await,
+        "both states match, both inner states reach the handler"
+    );
+    assert_eq!(common::take(), ["dual_name"]);
+
+    // Either enum failing its pattern falls the whole router through.
+    assert!(
+        !dispatch(States::Admins, Steps::Wizard(WizardStep::Name)).await,
+        "States does not match"
+    );
+    assert!(
+        !dispatch(States::Users(UserStates::ReceiveName), Steps::Done).await,
+        "Steps does not match"
+    );
+    assert!(common::take().is_empty());
 }

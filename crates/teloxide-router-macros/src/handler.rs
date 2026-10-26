@@ -50,7 +50,6 @@ fn expand(
         }
     };
     let krate = crate_path();
-    let name = &handler_fn.sig.ident;
     let router = &args.router;
     let priority = args.priority;
 
@@ -61,14 +60,19 @@ fn expand(
         },
         None => quote! { #krate::entry() },
     };
-    let leaf = args.steps.iter().fold(leaf, |leaf, step| match step {
-        Step::Link(link) => link.chain(&krate, leaf),
-        Step::Command { enum_path, pat } => quote! {
-            #krate::__private::HandlerExt::filter_command::<#enum_path>(#leaf)
-                .chain(#krate::__private::dptree::case![#pat])
-        },
+    let leaf = args.steps.iter().fold(leaf, |base, step| match step {
+        Step::Link(link) => link.chain(&krate, base),
+        Step::State(pat) => pat.case_chain(&krate, base),
+        Step::Command(pat) => {
+            let enum_path = &pat.enum_path;
+            let base = quote! {
+                #krate::__private::HandlerExt::filter_command::<#enum_path>(#base)
+            };
+            pat.case_chain(&krate, base)
+        }
     });
 
+    let name = &handler_fn.sig.ident;
     Ok(quote! {
         #handler_fn
 

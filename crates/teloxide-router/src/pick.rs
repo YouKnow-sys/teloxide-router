@@ -66,63 +66,26 @@ impl_pick!(A1, A2, A3, A4, A5, A6, A7, A8, A9, A10);
 impl_pick!(A1, A2, A3, A4, A5, A6, A7, A8, A9, A10, A11);
 impl_pick!(A1, A2, A3, A4, A5, A6, A7, A8, A9, A10, A11, A12);
 
-/// The `filter` or `filter_async` description for the probe result.
-pub fn filter_description<D: HandlerDescription>(is_async: bool) -> D {
-    if is_async {
-        D::filter_async()
-    } else {
-        D::filter()
-    }
+macro_rules! descriptions {
+    ($($name:ident: $sync:ident | $asynchronous:ident),* $(,)?) => {
+        $(
+            #[doc = concat!("The `", stringify!($sync), "` or `", stringify!($asynchronous),
+                            "` description for the probe result.")]
+            pub fn $name<D: HandlerDescription>(is_async: bool) -> D {
+                if is_async { D::$asynchronous() } else { D::$sync() }
+            }
+        )*
+    };
 }
 
-/// The `map` or `map_async` description for the probe result.
-pub fn map_description<D: HandlerDescription>(is_async: bool) -> D {
-    if is_async { D::map_async() } else { D::map() }
-}
-
-/// The `filter_map` or `filter_map_async` description for the probe result.
-pub fn filter_map_description<D: HandlerDescription>(is_async: bool) -> D {
-    if is_async {
-        D::filter_map_async()
-    } else {
-        D::filter_map()
-    }
-}
-
-/// The `try_filter` or `try_filter_async` description for the probe result.
-pub fn try_filter_description<D: HandlerDescription>(is_async: bool) -> D {
-    if is_async {
-        D::try_filter_async()
-    } else {
-        D::try_filter()
-    }
-}
-
-/// The `try_map` or `try_map_async` description for the probe result.
-pub fn try_map_description<D: HandlerDescription>(is_async: bool) -> D {
-    if is_async {
-        D::try_map_async()
-    } else {
-        D::try_map()
-    }
-}
-
-/// The `try_filter_map` or `try_filter_map_async` description for the probe result.
-pub fn try_filter_map_description<D: HandlerDescription>(is_async: bool) -> D {
-    if is_async {
-        D::try_filter_map_async()
-    } else {
-        D::try_filter_map()
-    }
-}
-
-/// The `inspect` or `inspect_async` description for the probe result.
-pub fn inspect_description<D: HandlerDescription>(is_async: bool) -> D {
-    if is_async {
-        D::inspect_async()
-    } else {
-        D::inspect()
-    }
+descriptions! {
+    filter_description: filter | filter_async,
+    map_description: map | map_async,
+    filter_map_description: filter_map | filter_map_async,
+    try_filter_description: try_filter | try_filter_async,
+    try_map_description: try_map | try_map_async,
+    try_filter_map_description: try_filter_map | try_filter_map_async,
+    inspect_description: inspect | inspect_async,
 }
 
 #[cfg(test)]

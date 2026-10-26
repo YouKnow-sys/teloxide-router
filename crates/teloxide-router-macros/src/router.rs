@@ -68,19 +68,15 @@ mod tests {
     use super::*;
     use quote::quote;
 
-    fn declaration(input: TokenStream2) -> syn::Result<Declaration> {
-        parse_declaration(input)
-    }
-
     fn ok(input: TokenStream2) -> Declaration {
-        match declaration(input) {
+        match parse_declaration(input) {
             Ok(d) => d,
             Err(_) => panic!("expected a valid declaration"),
         }
     }
 
     fn err(input: TokenStream2) -> syn::Error {
-        match declaration(input) {
+        match parse_declaration(input) {
             Err(e) => e,
             Ok(_) => panic!("expected an error"),
         }

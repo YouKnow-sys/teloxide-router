@@ -1,0 +1,5 @@
+error: `case!` has no wildcard arm; bind every field, e.g. `Command::Set(a, b)`
+ --> tests/ui/wildcard_handler_state.rs:5:54
+  |
+5 | #[txr::message(ROUTER, state = Dialogue::Ask { name: _ })]
+  |                                                      ^

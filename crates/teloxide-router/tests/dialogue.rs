@@ -7,7 +7,6 @@
 #[allow(dead_code)]
 mod common;
 
-use std::ops::ControlFlow;
 use std::sync::Arc;
 use teloxide::dispatching::UpdateFilterExt;
 use teloxide::dispatching::dialogue::{Dialogue, InMemStorage, Storage as _};
@@ -23,22 +22,18 @@ enum Step {
 
 type StepDialogue = Dialogue<Step, InMemStorage<Step>>;
 
-async fn dispatch(h: &txr::Handler, upd: &str, storage: &Arc<InMemStorage<Step>>) -> bool {
-    let mut dm = teloxide::dptree::di::DependencyMap::new();
-    dm.insert(common::update(upd));
-    dm.insert(common::me());
-    dm.insert(storage.clone());
-    matches!(h.dispatch(dm).await, ControlFlow::Break(Ok(())))
+async fn dispatch<S>(h: &txr::Handler, upd: &str, storage: &Arc<InMemStorage<S>>) -> bool
+where
+    S: Clone + Send + Sync + 'static,
+{
+    common::handled_with(h, upd, |dm| dm.insert(storage.clone())).await
 }
 
-async fn stored(storage: &Arc<InMemStorage<Step>>) -> Option<Step> {
+async fn stored<S>(storage: &Arc<InMemStorage<S>>) -> Option<S>
+where
+    S: Clone + Send + Sync + 'static,
+{
     storage.clone().get_dialogue(ChatId(1)).await.unwrap()
-}
-
-fn msg_with_text(text: &str) -> String {
-    format!(
-        r#"{{"update_id":1,"message":{{"message_id":42,"date":1721592028,"chat":{{"id":1,"type":"private"}},"text":"{text}"}}}}"#
-    )
 }
 
 fn has_text(msg: Message) -> bool {
@@ -58,8 +53,7 @@ async fn flow_start(msg: Message, dialogue: StepDialogue) -> txr::Result {
 }
 
 #[txr::message(FLOW, state = Step::GotName(name), filter = has_text)]
-async fn flow_got_name(msg: Message, dialogue: StepDialogue, name: String) -> txr::Result {
-    let _ = msg;
+async fn flow_got_name(dialogue: StepDialogue, name: String) -> txr::Result {
     common::record(if name == "rust" {
         "got_name"
     } else {
@@ -75,13 +69,13 @@ async fn router_dialogue_transitions_state() {
     let h = FLOW.build();
     let storage: Arc<InMemStorage<Step>> = InMemStorage::new();
 
-    assert!(dispatch(&h, &msg_with_text("rust"), &storage).await);
+    assert!(dispatch(&h, &common::msg_with_text("rust"), &storage).await);
     assert_eq!(common::take(), ["start"]);
     assert_eq!(stored(&storage).await, Some(Step::GotName("rust".into())));
 
     // the stored state routes the second message to the other handler, whose
     // reset writes the default state back into storage
-    assert!(dispatch(&h, &msg_with_text("again"), &storage).await);
+    assert!(dispatch(&h, &common::msg_with_text("again"), &storage).await);
     assert_eq!(common::take(), ["got_name"]);
     assert_eq!(stored(&storage).await, Some(Step::Start));
 }
@@ -180,4 +174,124 @@ async fn dialogue_on_reads_a_narrower_update_type() {
     let storage: Arc<InMemStorage<Step>> = InMemStorage::new();
     assert!(dispatch(&h, common::CALLBACK, &storage).await);
     assert_eq!(common::take(), ["cb_start"]);
+}
+
+// The real composition: a dialogue over a sum-type state, with the router
+// extracting the sub-flow it serves; the entry point matches the outer state.
+
+#[derive(Clone, Default, PartialEq, Debug)]
+enum Session {
+    #[default]
+    New,
+    Signup(Signup),
+    Support(Support),
+}
+
+#[derive(Clone, PartialEq, Debug)]
+enum Signup {
+    Name,
+    Age { name: String },
+}
+
+#[derive(Clone, PartialEq, Debug)]
+enum Support {
+    Ticket,
+}
+
+type SessionDialogue = Dialogue<Session, InMemStorage<Session>>;
+
+// Each child takes one sub-flow out of the session state; sibling routers
+// are the sound way to serve more than one, since the state list of a single
+// router would have to match every pattern at once.
+txr::router!(SIGNUP, state = Session::Signup(signup));
+txr::router!(SUPPORT, state = Session::Support(support));
+
+// The parent owns the dialogue and the outer-state entry point.
+txr::router!(
+    SESSION,
+    dialogue = SessionDialogue,
+    include = [&SIGNUP, &SUPPORT]
+);
+
+// Reached while the outer state is the default, before extraction matches.
+#[txr::message(SESSION, state = Session::New)]
+async fn session_start(msg: Message, dialogue: SessionDialogue) -> txr::Result {
+    let _ = msg;
+    common::record("session_start");
+    dialogue.update(Session::Signup(Signup::Name)).await?;
+    Ok(())
+}
+
+#[txr::message(SIGNUP, state = Signup::Name, filter = has_text)]
+async fn session_name(msg: Message, dialogue: SessionDialogue) -> txr::Result {
+    common::record("session_name");
+    let name = msg.text().unwrap_or_default().to_owned();
+    dialogue
+        .update(Session::Signup(Signup::Age { name }))
+        .await?;
+    Ok(())
+}
+
+#[txr::message(SIGNUP, state = Signup::Age { name })]
+async fn session_age(dialogue: SessionDialogue, name: String) -> txr::Result {
+    common::record(if name == "rust" {
+        "session_age"
+    } else {
+        "session_bad"
+    });
+    dialogue.reset().await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn dialogue_drives_an_extracted_substate() {
+    let _ser = common::serial();
+    let h = SESSION.build();
+    let storage: Arc<InMemStorage<Session>> = InMemStorage::new();
+
+    // The default state routes to the entry handler, which starts the flow.
+    assert!(dispatch(&h, &common::msg_with_text("rust"), &storage).await);
+    assert_eq!(common::take(), ["session_start"]);
+    assert_eq!(stored(&storage).await, Some(Session::Signup(Signup::Name)));
+
+    // From here the extracted Signup state drives the handlers.
+    assert!(dispatch(&h, &common::msg_with_text("rust"), &storage).await);
+    assert_eq!(common::take(), ["session_name"]);
+    assert_eq!(
+        stored(&storage).await,
+        Some(Session::Signup(Signup::Age {
+            name: "rust".into()
+        }))
+    );
+
+    assert!(dispatch(&h, &common::msg_with_text("30"), &storage).await);
+    assert_eq!(common::take(), ["session_age"]);
+    // reset writes the default back.
+    assert_eq!(stored(&storage).await, Some(Session::New));
+}
+
+#[txr::message(SUPPORT, state = Support::Ticket)]
+async fn support_ticket(dialogue: SessionDialogue) -> txr::Result {
+    common::record("support_ticket");
+    dialogue.reset().await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn sibling_routers_each_extract_their_substate() {
+    let _ser = common::serial();
+    let h = SESSION.build();
+    let storage: Arc<InMemStorage<Session>> = InMemStorage::new();
+
+    // Seed the session straight into the support sub-flow.
+    storage
+        .clone()
+        .update_dialogue(ChatId(1), Session::Support(Support::Ticket))
+        .await
+        .unwrap();
+
+    // The SIGNUP extraction rejects the state, SUPPORT's accepts it.
+    assert!(dispatch(&h, &common::msg_with_text("help"), &storage).await);
+    assert_eq!(common::take(), ["support_ticket"]);
+    assert_eq!(stored(&storage).await, Some(Session::New));
 }

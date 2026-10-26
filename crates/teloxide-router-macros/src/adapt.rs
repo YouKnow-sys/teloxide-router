@@ -3,7 +3,7 @@
 use proc_macro2::{Span, TokenStream};
 use quote::{format_ident, quote, quote_spanned};
 use syn::spanned::Spanned as _;
-use syn::{Expr, Pat, Type};
+use syn::{Expr, Pat, Path, Type};
 
 macro_rules! combinators {
     ($(($key:literal, $variant:ident)),* $(,)?) => {
@@ -51,11 +51,27 @@ pub(crate) enum Link {
         combinator: Combinator,
         expr: Expr,
     },
-    State(Pat),
+    State(StatePat),
     Dialogue {
         spec: Box<Type>,
         on: Option<Box<Type>>,
     },
+}
+
+/// A `state`/`command` variant pattern, applied as a `dptree::case!` step;
+/// `enum_path` also feeds the `filter_command` step.
+pub(crate) struct StatePat {
+    pub(crate) enum_path: Path,
+    pub(crate) pat: Pat,
+}
+
+impl StatePat {
+    /// Binds the pattern's fields into the dependency map, a tuple for
+    /// several.
+    pub(crate) fn case_chain(&self, krate: &TokenStream, base: TokenStream) -> TokenStream {
+        let pat = &self.pat;
+        quote! { #base.chain(#krate::__private::dptree::case![#pat]) }
+    }
 }
 
 impl Link {
@@ -79,10 +95,7 @@ impl Link {
                 };
                 quote! { #base.chain(#step) }
             }
-            Link::State(pat) => {
-                let step = quote! { #krate::__private::dptree::case![#pat] };
-                quote! { #base.chain(#step) }
-            }
+            Link::State(pat) => pat.case_chain(krate, base),
             Link::Dialogue { spec, on } => {
                 let on = match on {
                     Some(ty) => quote! { #ty },

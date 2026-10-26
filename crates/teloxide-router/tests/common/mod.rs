@@ -1,4 +1,5 @@
 use std::sync::{Mutex, MutexGuard};
+use teloxide::dptree::di::DependencyMap;
 use teloxide::types::{Me, Update, User, UserId};
 use teloxide_router as txr;
 
@@ -7,6 +8,12 @@ pub const MSG: &str = r#"{"update_id":1,"message":{"message_id":42,"date":172159
 pub const CALLBACK: &str = r#"{"update_id":2,"callback_query":{"id":"cb1","chat_instance":"x","from":{"id":1,"is_bot":false,"first_name":"A"},"data":"payload","message":{"message_id":7,"date":1721592028,"chat":{"id":1,"type":"private"},"text":"page"}}}"#;
 
 pub const INLINE: &str = r#"{"update_id":3,"inline_query":{"id":"q1","query":"hi","offset":"","from":{"id":1,"is_bot":false,"first_name":"A"}}}"#;
+
+pub fn msg_with_text(text: &str) -> String {
+    format!(
+        r#"{{"update_id":1,"message":{{"message_id":42,"date":1721592028,"chat":{{"id":1,"type":"private"}},"text":"{text}"}}}}"#
+    )
+}
 
 pub fn update(json: &str) -> Update {
     serde_json::from_str(json).expect("valid fixture update")
@@ -35,9 +42,20 @@ pub fn me() -> Me {
 
 /// Dispatches a fabricated update and reports whether a handler handled it.
 pub async fn handled(h: &txr::Handler, upd: &str) -> bool {
-    let mut dm = teloxide::dptree::di::DependencyMap::new();
+    handled_with(h, upd, |_| {}).await
+}
+
+/// [`handled`] with extra dependencies inserted before the dispatch; the
+/// closure's return value is discarded.
+pub async fn handled_with<R>(
+    h: &txr::Handler,
+    upd: &str,
+    extras: impl FnOnce(&mut DependencyMap) -> R,
+) -> bool {
+    let mut dm = DependencyMap::new();
     dm.insert(update(upd));
     dm.insert(me());
+    extras(&mut dm);
     matches!(h.dispatch(dm).await, std::ops::ControlFlow::Break(Ok(())))
 }
 
